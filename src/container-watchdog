@@ -718,9 +718,10 @@ report_all() {
   while IFS= read -r line; do
     read_record "$line" || continue
     load_counters "$record_container"
-    printf 'container=%s action=%s checks=%s networks=%s threshold=%s cooldown=%s max_actions=%s window=%s verdict=%s fails=%s repairs=%s suspended=%s latched=%s\n' \
+    printf 'container=%s action=%s checks=%s networks=%s threshold=%s cooldown=%s max_actions=%s window=%s http=%s verdict=%s fails=%s repairs=%s suspended=%s latched=%s\n' \
       "$record_container" "$record_action" "$record_checks" "${record_networks:--}" \
       "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window" \
+      "${record_http:--}" \
       "${counter_last_verdict:-unknown}" "$counter_fails" "$counter_actions" \
       "$(is_suspended "$record_container" && echo yes || echo no)" \
       "$(is_latched "$record_container" && echo yes || echo no)"

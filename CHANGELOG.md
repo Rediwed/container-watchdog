@@ -5,6 +5,17 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29j]
+
+### Added
+
+- The action level is now a dropdown in the container table, so a container can
+  be moved between notify, restart, and reattach without retyping its record.
+  Every other setting travels with the change, and switching to reattach asks
+  which networks must stay attached rather than rejecting the change.
+- `report` now includes the probe URL, so changing a level cannot silently drop
+  a configured HTTP check.
+
 ## [2026.07.29i]
 
 ### Fixed

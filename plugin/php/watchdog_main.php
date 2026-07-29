@@ -192,6 +192,18 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     }[character]));
   }
 
+  function levelSelect(record) {
+    const levels = ['notify', 'restart', 'reattach'];
+    const options = levels.map(level =>
+      `<option value="${level}"${level === record.action ? ' selected' : ''}>${level}</option>`
+    ).join('');
+    // Every other setting travels with the change so switching a level cannot
+    // silently reset a probe, a threshold, or a repair budget.
+    const carry = ['checks', 'networks', 'threshold', 'cooldown', 'max_actions', 'window', 'http']
+      .map(key => `data-${key}="${escape(record[key])}"`).join(' ');
+    return `<select class="watchdog-level" data-container="${escape(record.container)}" ${carry}>${options}</select>`;
+  }
+
   function render(records) {
     if (!records.length) {
       rows.innerHTML = '<tr><td colspan="8" class="watchdog-subtle">Nothing is being watched yet.</td></tr>';
@@ -203,7 +215,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
       return `<tr>
         <td><strong>${name}</strong></td>
         <td>${verdictBadge(record)}</td>
-        <td>${escape(record.action)}</td>
+        <td>${levelSelect(record)}</td>
         <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.checks)}</div></td>
         <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.networks)}</div></td>
         <td>${escape(record.fails)}</td>
@@ -224,6 +236,49 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
       render(parseRecords(result.output || ''));
     });
   }
+
+  rows.addEventListener('change', event => {
+    const select = event.target.closest('select.watchdog-level');
+    if (!select) return;
+    const container = select.dataset.container;
+    const level = select.value;
+    const payload = {
+      op: 'save',
+      container,
+      action: level,
+      checks: select.dataset.checks,
+    };
+    ['threshold', 'cooldown', 'max_actions', 'window'].forEach(key => {
+      if (select.dataset[key]) payload[key] = select.dataset[key];
+    });
+    const probe = select.dataset.http;
+    if (probe && probe !== '-') payload.http = probe;
+
+    let networks = select.dataset.networks;
+    if (networks === '-') networks = '';
+    if (level === 'reattach' && !networks) {
+      // Reattach cannot work without knowing which networks must stay attached,
+      // so ask rather than let the endpoint reject the change.
+      networks = (window.prompt(
+        'Which Docker networks must ' + container + ' stay attached to?\n' +
+        'Comma separated, for example: redman-docker-api', ''
+      ) || '').trim();
+      if (!networks) {
+        show('Cancelled: reattach needs at least one network.');
+        refresh();
+        return;
+      }
+    }
+    if (networks) payload.networks = networks;
+
+    select.disabled = true;
+    post(payload).then(result => {
+      show(result.ok
+        ? container + ' may now ' + level + '.'
+        : (result.error || result.output));
+      return refresh();
+    }).finally(() => { select.disabled = false; });
+  });
 
   rows.addEventListener('click', event => {
     const button = event.target.closest('button[data-op]');

@@ -92,6 +92,11 @@
   white-space: nowrap;
 }
 
+.watchdog-level {
+  padding: 2px 4px;
+  font-size: 0.78rem;
+}
+
 .watchdog-row-actions button {
   margin-right: 2px;
   padding: 3px 7px;

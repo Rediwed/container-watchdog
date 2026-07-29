@@ -70,6 +70,15 @@ done
 # The only Docker call it may make is a read-only listing for the add form.
 assert 'docker ps -a --format' "$ACTION" "the container list should come from a read-only listing"
 
+# ── Changing a level must carry every other setting along ──
+assert 'select class="watchdog-level"' "$MAIN" "the action level must be editable in the table"
+# The carry list is asserted literally: dropping a name here would silently reset
+# that setting whenever an operator changes a level.
+assert "\\['checks', 'networks', 'threshold', 'cooldown', 'max_actions', 'window', 'http'\\]" \
+  "$MAIN" "changing a level must preserve every other setting"
+assert 'reattach needs at least one network' "$MAIN" \
+  "switching to reattach without networks must ask rather than fail"
+
 # ── Output is escaped before it reaches the browser ──
 assert 'htmlspecialchars' "$MAIN" "server-rendered values must be escaped"
 assert 'function escape' "$MAIN" "client-rendered values must be escaped"
