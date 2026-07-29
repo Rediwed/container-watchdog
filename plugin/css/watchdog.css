@@ -42,6 +42,13 @@
   background: rgba(255, 152, 0, 0.12);
 }
 
+/* The action column must stay reachable on narrow viewports, so the table
+   scrolls horizontally rather than clipping its last button. */
+.watchdog-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
 .watchdog-table {
   width: 100%;
   border-collapse: collapse;
@@ -49,7 +56,7 @@
 
 .watchdog-table th,
 .watchdog-table td {
-  padding: 8px 10px;
+  padding: 8px 6px;
   text-align: left;
   border-bottom: 1px solid rgba(128, 128, 128, 0.25);
   vertical-align: middle;
@@ -81,8 +88,22 @@
 .watchdog-badge-suspended { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
 .watchdog-badge-latched { background: rgba(103, 58, 183, 0.2); color: #9575cd; }
 
+.watchdog-row-actions {
+  white-space: nowrap;
+}
+
 .watchdog-row-actions button {
-  margin-right: 4px;
+  margin-right: 2px;
+  padding: 3px 7px;
+  font-size: 0.72rem;
+}
+
+/* Long check lists should not push the buttons off screen. A max-width only
+   constrains a table cell through an inner block element. */
+.watchdog-wrap {
+  max-width: 15ch;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .watchdog-danger {

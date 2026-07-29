@@ -65,6 +65,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
 </div>
 <?php endif; ?>
 
+<div class="watchdog-table-wrap">
 <table class="watchdog-table">
   <thead>
     <tr>
@@ -82,6 +83,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     <tr><td colspan="8" class="watchdog-subtle">Loading…</td></tr>
   </tbody>
 </table>
+</div>
 
 <div class="watchdog-toolbar">
   <button type="button" class="watchdog-button" id="watchdog-refresh">Refresh</button>
@@ -202,8 +204,8 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
         <td><strong>${name}</strong></td>
         <td>${verdictBadge(record)}</td>
         <td>${escape(record.action)}</td>
-        <td class="watchdog-subtle">${escape(record.checks)}</td>
-        <td class="watchdog-subtle">${escape(record.networks)}</td>
+        <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.checks)}</div></td>
+        <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.networks)}</div></td>
         <td>${escape(record.fails)}</td>
         <td>${escape(record.repairs)}</td>
         <td class="watchdog-row-actions">

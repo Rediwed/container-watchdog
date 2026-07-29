@@ -5,6 +5,14 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29i]
+
+### Fixed
+
+- The Remove button was clipped off the right edge of the container table. The
+  table now scrolls horizontally, the action buttons are compact, and the check
+  and network columns wrap instead of pushing the buttons out of reach.
+
 ## [2026.07.29f]
 
 ### Fixed
