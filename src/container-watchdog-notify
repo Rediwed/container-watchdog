@@ -67,6 +67,7 @@ case "$MESSAGE" in
 esac
 
 host=$(hostname -s 2>/dev/null || hostname)
+[[ ! -L "$RUNTIME_DIR" ]] || exit 0
 mkdir -p "$RUNTIME_DIR"
 chmod 0700 "$RUNTIME_DIR"
 CURL_CONFIG=$(mktemp "$RUNTIME_DIR/.ntfy.XXXXXX") || exit 0

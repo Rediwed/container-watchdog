@@ -5,6 +5,26 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29b]
+
+### Fixed
+
+- Reattach now validates every declared network *before* stopping the container,
+  and always starts it again on any later failure. Previously an unknown or
+  renamed network could leave a healthy-but-detached container fully stopped
+  until the next cycle cleared the cooldown.
+
+### Security
+
+- The optional probe is restricted to HTTP and HTTPS and no longer follows
+  redirects, so an operator-supplied URL cannot be steered elsewhere.
+- Pathname expansion is disabled in the main script, so a configuration value
+  containing a glob character can never match a file.
+- Interface input patterns now reject a trailing newline, which PCRE would
+  otherwise accept and which could split a record into a silently
+  misconfigured one.
+- The notifier mirrors the symlink guard on its runtime directory.
+
 ## [2026.07.29a]
 
 ### Added

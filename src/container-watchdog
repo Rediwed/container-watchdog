@@ -8,6 +8,10 @@
 # go through the audited path and leave a persistent latch.
 
 set -u
+# Configuration values are split on whitespace in several loops; disabling
+# pathname expansion keeps a value such as an http probe containing a glob
+# character from ever matching a file.
+set -f
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -438,7 +442,8 @@ run_checks() {
       http)
         [[ -n "$http" ]] || continue
         local code
-        code=$("$TIMEOUT_TOOL" -k 1 10 "$CURL_TOOL" -s -o /dev/null -w '%{http_code}' --max-time 8 "$http" 2>/dev/null)
+        code=$("$TIMEOUT_TOOL" -k 1 10 "$CURL_TOOL" -s -o /dev/null -w '%{http_code}' \
+          --proto '=http,https' --max-redirs 0 --max-time 8 "$http" 2>/dev/null)
         if [[ "$code" != "$http_status" ]]; then
           check_reason="http-${code:-000}"
           check_fault=unhealthy
@@ -481,15 +486,21 @@ do_restart() {
 
 # Reattaching requires the container to be stopped: connecting a running
 # container leaves its published ports unmapped, which is the very fault we fix.
+# Everything that can fail is therefore checked before the stop, and once the
+# container is down every remaining path must start it again.
 do_reattach() {
   local name=$1 networks=$2 network
-  "$TIMEOUT_TOOL" -k 5 "$ACTION_TIMEOUT" "$DOCKER_TOOL" stop "$name" >/dev/null 2>&1 || return 1
+
   for network in ${networks//,/ }; do
     [[ -n "$network" ]] || continue
     valid_network "$network" || return 1
-    if ! "$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" network inspect "$network" >/dev/null 2>&1; then
-      return 1
-    fi
+    "$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" network inspect "$network" >/dev/null 2>&1 || return 1
+  done
+
+  "$TIMEOUT_TOOL" -k 5 "$ACTION_TIMEOUT" "$DOCKER_TOOL" stop "$name" >/dev/null 2>&1 || return 1
+
+  for network in ${networks//,/ }; do
+    [[ -n "$network" ]] || continue
     "$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" network connect "$network" "$name" >/dev/null 2>&1 || true
   done
   do_start "$name"

@@ -34,7 +34,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 /** Container names match the exact pattern the command line enforces. */
 function validName(string $value): bool
 {
-    return (bool) preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/', $value);
+    return (bool) preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/D', $value);
 }
 
 function validAction(string $value): bool
@@ -68,7 +68,7 @@ function validNetworks(string $value): bool
 
 function validUrl(string $value): bool
 {
-    return (bool) preg_match('#^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?=&%-]*)?$#', $value);
+    return (bool) preg_match('#^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?=&%-]*)?$#D', $value);
 }
 
 /**
@@ -152,7 +152,7 @@ switch ($operation) {
             if ($value === '') {
                 continue;
             }
-            if (!preg_match('/^[0-9]{1,7}$/', $value)) {
+            if (!preg_match('/^[0-9]{1,7}$/D', $value)) {
                 refuse(400, 'Invalid value for ' . $numeric . '.');
             }
             $arguments[] = $numeric . '=' . $value;
@@ -169,7 +169,7 @@ switch ($operation) {
         // Offers existing container names for the add form. Read-only.
         $output = [];
         $exitCode = 0;
-        exec('docker ps -a --format {{.Names}} 2>/dev/null', $output, $exitCode);
+        exec("docker ps -a --format '{{.Names}}' 2>/dev/null", $output, $exitCode);
         $names = array_values(array_filter($output, 'validName'));
         sort($names, SORT_NATURAL | SORT_FLAG_CASE);
         echo json_encode(['ok' => true, 'containers' => $names]);

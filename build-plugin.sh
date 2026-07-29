@@ -22,7 +22,7 @@ CSS_FILE="$SCRIPT_DIR/plugin/css/watchdog.css"
 README_FILE="$SCRIPT_DIR/README.md"
 DIST_DIR="$SCRIPT_DIR/dist"
 OUTPUT="$DIST_DIR/container-watchdog.plg"
-VERSION="${1:-2026.07.29a}"
+VERSION="${1:-2026.07.29b}"
 
 for file in "$HOST_SCRIPT" "$NOTIFY_SCRIPT" "$STATUS_SCRIPT" "$CRON_FILE" \
   "$EVENT_FILE" "$REMOVE_SCRIPT" "$EXAMPLE_FILE" "$PAGE_FILE" "$MAIN_PHP_FILE" \
@@ -94,6 +94,14 @@ cat > "$TEMPORARY" <<EOF
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.0.0" icon="dog" pluginURL="https://github.com/Rediwed/container-watchdog/releases/latest/download/container-watchdog.plg">
   <CHANGES>
 ###$VERSION
+- Reattach now validates every network before stopping the container, and always
+  starts it again, so an unknown or renamed network can no longer leave a
+  container down until the next cycle.
+- Hardened the optional probe against redirects and non-HTTP protocols, disabled
+  pathname expansion, and tightened interface input patterns against a trailing
+  newline.
+
+###2026.07.29a
 - Added a web interface under Settings, Utilities, rendered by the existing
   authenticated Unraid web server. The plugin still opens no listener of its own.
 - The interface shows every watched container with its verdict, action level,

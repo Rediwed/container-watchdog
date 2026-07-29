@@ -29,6 +29,7 @@ NOTICES="$WORK/notices.log"
 : > "$NOTICES"
 
 printf 'running|healthy|| | |redman-docker-api\n' > "$WORK/fixtures/detached"
+printf 'running|healthy|| | |ghost-network\n' > "$WORK/fixtures/orphan"
 printf 'running|unhealthy|bridge~192.0.2.4 | | |bridge\n' > "$WORK/fixtures/sick"
 printf 'exited|none|| | |bridge\n' > "$WORK/fixtures/stopped"
 
@@ -43,8 +44,18 @@ case "\$1" in
     exit 0
     ;;
   network)
-    [[ "\$2" == connect ]] && printf 'network-connect %s %s\n' "\$3" "\$4" >> "$ACTIONS"
-    exit 0
+    case "\$2" in
+      inspect)
+        # Only this network exists on the fake host.
+        [[ "\$3" == redman-docker-api ]] || exit 1
+        exit 0
+        ;;
+      connect)
+        printf 'network-connect %s %s\n' "\$3" "\$4" >> "$ACTIONS"
+        exit 0
+        ;;
+    esac
+    exit 1
     ;;
   start|restart|stop)
     printf '%s %s\n' "\$1" "\$2" >> "$ACTIONS"
@@ -103,6 +114,7 @@ export PATH="$WORK/bin:$PATH"
 
 cat > "$WATCHDOG_CONFIG_FILE" <<'CONFIG'
 container=detached action=reattach networks=redman-docker-api threshold=3 cooldown=60 max_actions=2 window=3600
+container=orphan action=reattach networks=ghost-network threshold=1 cooldown=60 max_actions=2 window=3600
 container=sick action=restart threshold=1 cooldown=60 max_actions=2 window=3600
 container=stopped action=restart threshold=1 cooldown=60 max_actions=2 window=3600
 CONFIG
@@ -147,6 +159,16 @@ assert '^start detached' "$ACTIONS" "reattach did not start the container again"
 stop_line=$(grep -n '^stop detached' "$ACTIONS" | head -1 | cut -d: -f1)
 connect_line=$(grep -n '^network-connect' "$ACTIONS" | head -1 | cut -d: -f1)
 (( stop_line < connect_line )) || fail "reattach connected the network before stopping"
+
+# ── A network that does not exist must never leave a container down ──
+# The orphan record names a network the host does not have. Validating only
+# after the stop would turn a degraded container into a fully stopped one, so
+# this container must never appear in the action log at all.
+: > "$ACTIONS"
+age_last_action orphan
+"$WATCHDOG" run >/dev/null
+refute '^stop orphan' "$ACTIONS" "reattach stopped a container it could not repair"
+refute 'ghost-network' "$ACTIONS" "connected to a network that does not exist"
 
 # ── A Breakglass latch is absolute ──
 : > "$ACTIONS"

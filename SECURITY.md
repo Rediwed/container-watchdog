@@ -62,9 +62,14 @@ weakened without a failing test.
 
 ## Secrets
 
-- The ntfy token lives in a mode `0600` file on the Unraid flash device, outside
-  the repository, and is passed to `curl` through a mode `0600` config file so it
-  never appears in the process list.
+- The ntfy token lives in its own file on the Unraid flash device, outside the
+  repository, and is passed to `curl` through a config file so it never appears
+  in the process list.
+- Be aware that the flash device is FAT, where the mode `0600` the installer
+  requests is not actually enforced. The real boundary is who can reach the
+  `flash` share. The same applies to the installed cron fragment: anyone with
+  write access to flash effectively has root cron on the host, with or without
+  this plugin.
 - When no local token is configured, the Container Breakglass credentials are
   reused rather than duplicated.
 - The published `status.json` is aggregate-only. It contains no container names,
