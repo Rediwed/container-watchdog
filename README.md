@@ -208,7 +208,7 @@ Then add a service widget to `services.yaml`:
 ## Build
 
 ```bash
-./build-plugin.sh 2026.07.29j
+./build-plugin.sh 2026.07.29k
 ```
 
 Produces a self-contained `dist/container-watchdog.plg` with every payload

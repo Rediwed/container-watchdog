@@ -216,7 +216,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
         <td><strong>${name}</strong></td>
         <td>${verdictBadge(record)}</td>
         <td>${levelSelect(record)}</td>
-        <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.checks)}</div></td>
+        <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.checks).replace(/,/g, ', ')}</div></td>
         <td class="watchdog-subtle"><div class="watchdog-wrap">${escape(record.networks)}</div></td>
         <td>${escape(record.fails)}</td>
         <td>${escape(record.repairs)}</td>

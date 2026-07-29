@@ -93,6 +93,7 @@
 }
 
 .watchdog-level {
+  min-width: 6.5rem;
   padding: 2px 4px;
   font-size: 0.78rem;
 }
@@ -104,9 +105,12 @@
 }
 
 /* Long check lists should not push the buttons off screen. A max-width only
-   constrains a table cell through an inner block element. */
+   constrains a table cell through an inner block element, and the host theme
+   inherits white-space: nowrap onto it, which would make that max-width overflow
+   instead of wrap. */
 .watchdog-wrap {
   max-width: 15ch;
+  white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
 }

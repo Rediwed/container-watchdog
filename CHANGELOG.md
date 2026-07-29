@@ -5,7 +5,15 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
-## [2026.07.29j]
+## [2026.07.29k]
+
+### Fixed
+
+- Table text overflowed its columns and ran into the neighbouring ones. The host
+  theme inherits `white-space: nowrap` onto the cells, so the width limit on the
+  check and network columns clipped rather than wrapped. Wrapping is now forced
+  explicitly, the check list breaks at its separators, and the level dropdown has
+  a minimum width so it no longer spills out of its column.
 
 ### Added
 
