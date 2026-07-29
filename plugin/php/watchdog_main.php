@@ -32,29 +32,29 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
 <link rel="stylesheet" href="/plugins/container-watchdog/css/watchdog.css">
 
 <div class="watchdog-summary">
-  <div class="watchdog-tile watchdog-state-<?= htmlspecialchars(strtolower((string) field($summary, 'status', 'unknown')), ENT_QUOTES) ?>">
+  <div class="watchdog-tile watchdog-state-<?= htmlspecialchars(strtolower((string) field($summary, 'status', 'unknown')), ENT_QUOTES) ?>" id="watchdog-tile-status">
     <span class="watchdog-tile-label">Status</span>
-    <span class="watchdog-tile-value"><?= htmlspecialchars((string) field($summary, 'status'), ENT_QUOTES) ?></span>
+    <span class="watchdog-tile-value" data-tile="status"><?= htmlspecialchars((string) field($summary, 'status'), ENT_QUOTES) ?></span>
   </div>
   <div class="watchdog-tile">
     <span class="watchdog-tile-label">Watched</span>
-    <span class="watchdog-tile-value"><?= htmlspecialchars((string) field($summary, 'watched', '0'), ENT_QUOTES) ?></span>
+    <span class="watchdog-tile-value" data-tile="watched"><?= htmlspecialchars((string) field($summary, 'watched', '0'), ENT_QUOTES) ?></span>
   </div>
   <div class="watchdog-tile">
     <span class="watchdog-tile-label">Failing</span>
-    <span class="watchdog-tile-value"><?= htmlspecialchars((string) field($summary, 'failing', '0'), ENT_QUOTES) ?></span>
+    <span class="watchdog-tile-value" data-tile="failing"><?= htmlspecialchars((string) field($summary, 'failing', '0'), ENT_QUOTES) ?></span>
   </div>
   <div class="watchdog-tile">
     <span class="watchdog-tile-label">Suspended</span>
-    <span class="watchdog-tile-value"><?= htmlspecialchars((string) field($summary, 'suspended', '0'), ENT_QUOTES) ?></span>
+    <span class="watchdog-tile-value" data-tile="suspended"><?= htmlspecialchars((string) field($summary, 'suspended', '0'), ENT_QUOTES) ?></span>
   </div>
   <div class="watchdog-tile">
     <span class="watchdog-tile-label">Repairs</span>
-    <span class="watchdog-tile-value"><?= htmlspecialchars((string) field($summary, 'repairs', '0'), ENT_QUOTES) ?></span>
+    <span class="watchdog-tile-value" data-tile="repairs"><?= htmlspecialchars((string) field($summary, 'repairs', '0'), ENT_QUOTES) ?></span>
   </div>
   <div class="watchdog-tile">
     <span class="watchdog-tile-label">Failed repairs</span>
-    <span class="watchdog-tile-value"><?= htmlspecialchars((string) field($summary, 'repairs_failed', '0'), ENT_QUOTES) ?></span>
+    <span class="watchdog-tile-value" data-tile="repairs_failed"><?= htmlspecialchars((string) field($summary, 'repairs_failed', '0'), ENT_QUOTES) ?></span>
   </div>
 </div>
 
@@ -89,6 +89,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
   <button type="button" class="watchdog-button" id="watchdog-refresh">Refresh</button>
   <button type="button" class="watchdog-button" id="watchdog-check">Run checks now</button>
   <span class="watchdog-subtle">Running checks never repairs anything.</span>
+  <span class="watchdog-subtle" id="watchdog-updated"></span>
 </div>
 
 <pre id="watchdog-output" class="watchdog-output" hidden></pre>
@@ -153,13 +154,15 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
   const token = <?= json_encode($watchdogCsrf) ?>;
   const rows = document.getElementById('watchdog-rows');
   const output = document.getElementById('watchdog-output');
+  let lastReport = null;
 
   function post(payload) {
     const body = new URLSearchParams();
     body.set('csrf_token', token);
     Object.entries(payload).forEach(([key, value]) => body.set(key, value));
     return fetch(endpoint, { method: 'POST', body })
-      .then(response => response.json().catch(() => ({ ok: false, error: 'Malformed response' })));
+      .then(response => response.json().catch(() => ({ ok: false, error: 'Malformed response' })))
+      .catch(() => ({ ok: false, error: 'The server did not respond.' }));
   }
 
   function show(text) {
@@ -183,7 +186,10 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     if (record.suspended === 'yes') return '<span class="watchdog-badge watchdog-badge-suspended">suspended</span>';
     if (record.verdict === 'fail') return '<span class="watchdog-badge watchdog-badge-fail">failing</span>';
     if (record.verdict === 'ok') return '<span class="watchdog-badge watchdog-badge-ok">ok</span>';
-    return '<span class="watchdog-badge">unknown</span>';
+    // No verdict has been recorded yet: a freshly added container, or counters
+    // cleared by a reset or a plugin update. The next cycle fills it in.
+    return '<span class="watchdog-badge watchdog-badge-checking"' +
+      ' title="No check has completed yet. The next cycle will fill this in.">checking</span>';
   }
 
   function escape(value) {
@@ -230,10 +236,43 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     }).join('');
   }
 
-  function refresh() {
+  function applySummary(summary) {
+    if (!summary) return;
+    document.querySelectorAll('[data-tile]').forEach(node => {
+      const value = summary[node.dataset.tile];
+      const text = (value === undefined || value === null || value === '') ? '—' : String(value);
+      if (node.textContent !== text) node.textContent = text;
+    });
+    const tile = document.getElementById('watchdog-tile-status');
+    if (tile && summary.status) {
+      tile.className = 'watchdog-tile watchdog-state-' +
+        String(summary.status).toLowerCase().replace(/[^a-z0-9-]/g, '');
+    }
+  }
+
+  function stamp() {
+    const node = document.getElementById('watchdog-updated');
+    if (node) node.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  }
+
+  function refresh(quiet) {
     return post({ op: 'report' }).then(result => {
-      if (!result.ok) { show(result.error || 'Could not read the watchdog state.'); return; }
-      render(parseRecords(result.output || ''));
+      if (!result.ok) {
+        // A silent background poll must not overwrite whatever the page is
+        // already showing the user.
+        if (!quiet) show(result.error || 'Could not read the watchdog state.');
+        return false;
+      }
+      const text = result.output || '';
+      // Redrawing identical rows would only throw away a text selection or an
+      // open dropdown for no gain.
+      if (text !== lastReport) {
+        lastReport = text;
+        render(parseRecords(text));
+      }
+      applySummary(result.summary);
+      stamp();
+      return true;
     });
   }
 
@@ -337,6 +376,41 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
       result.containers.map(name => `<option value="${escape(name)}"></option>`).join('');
   });
 
-  refresh();
+  // Keep the page current without a reload. Reporting only reads state files, so
+  // polling it is cheap, but it still pauses when nobody is looking at it.
+  const POLL_INTERVAL = 10000;
+  const POLL_BACKOFF_MAX = 120000;
+  let pollDelay = POLL_INTERVAL;
+  let pollTimer = null;
+
+  function interacting() {
+    // Never redraw underneath someone who is using the table: a focused select
+    // may have its list open, and a disabled control means a request is running.
+    const active = document.activeElement;
+    if (active && active !== document.body && rows.contains(active)) return true;
+    return rows.querySelector('button:disabled, select:disabled') !== null;
+  }
+
+  function schedule(delay) {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, delay);
+  }
+
+  function poll() {
+    if (document.hidden || interacting()) { schedule(pollDelay); return; }
+    refresh(true).then(ok => {
+      // Back off when the endpoint is unhappy rather than hammering it.
+      pollDelay = ok ? POLL_INTERVAL : Math.min(pollDelay * 2, POLL_BACKOFF_MAX);
+      schedule(pollDelay);
+    });
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    pollDelay = POLL_INTERVAL;
+    schedule(250);
+  });
+
+  refresh().then(() => schedule(POLL_INTERVAL));
 })();
 </script>

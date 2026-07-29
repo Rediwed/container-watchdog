@@ -87,6 +87,7 @@
 .watchdog-badge-fail { background: rgba(244, 67, 54, 0.2); color: #f44336; }
 .watchdog-badge-suspended { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
 .watchdog-badge-latched { background: rgba(103, 58, 183, 0.2); color: #9575cd; }
+.watchdog-badge-checking { background: rgba(120, 144, 156, 0.2); color: #90a4ae; }
 
 .watchdog-row-actions {
   white-space: nowrap;

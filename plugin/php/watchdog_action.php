@@ -125,8 +125,18 @@ $container = (string) ($_POST['container'] ?? '');
 
 switch ($operation) {
     case 'report':
+        // The summary travels with the listing so the page can refresh the tiles
+        // and the table from a single request.
         $result = watchdog(['report']);
-        echo json_encode(['ok' => true, 'output' => $result['output']]);
+        $summary = null;
+        $statusFile = '/run/container-watchdog/public/status.json';
+        if (is_readable($statusFile)) {
+            $decoded = json_decode((string) file_get_contents($statusFile), true);
+            if (is_array($decoded)) {
+                $summary = $decoded;
+            }
+        }
+        echo json_encode(['ok' => true, 'output' => $result['output'], 'summary' => $summary]);
         break;
 
     case 'check':

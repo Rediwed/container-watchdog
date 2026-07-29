@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXPECTED_VERSION="2026.07.29k"
+EXPECTED_VERSION="2026.07.29l"
 
 for script in \
   "$ROOT/build-plugin.sh" \

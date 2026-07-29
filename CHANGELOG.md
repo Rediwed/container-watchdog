@@ -5,6 +5,22 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29l]
+
+### Added
+
+- The page now refreshes itself, so the table and the summary tiles stay current
+  without a reload. Polling pauses while the tab is hidden or while a control is
+  in use, skips redrawing when nothing changed, and backs off if the endpoint
+  stops answering. The toolbar shows when the view was last updated.
+
+### Changed
+
+- A container with no recorded verdict now reads `checking` rather than
+  `unknown`. It means the first cycle has not finished yet, which happens after
+  adding a container, resetting its counters, or updating the plugin, and it is
+  not a fault.
+
 ## [2026.07.29k]
 
 ### Fixed
