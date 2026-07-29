@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXPECTED_VERSION="2026.07.29d"
+EXPECTED_VERSION="2026.07.29f"
 
 for script in \
   "$ROOT/build-plugin.sh" \
@@ -19,6 +19,7 @@ bash "$ROOT/tests/test-config.sh"
 bash "$ROOT/tests/test-checks.sh"
 bash "$ROOT/tests/test-safety.sh"
 bash "$ROOT/tests/test-status.sh"
+bash "$ROOT/tests/test-notify.sh"
 bash "$ROOT/tests/test-ui.sh"
 
 "$ROOT/build-plugin.sh" "$EXPECTED_VERSION" >/dev/null
@@ -77,6 +78,14 @@ unset WATCHDOG_RUNTIME_DIR WATCHDOG_PLUGIN_PERSIST_DIR WATCHDOG_STATE_DIR \
 export PATH=$original_path
 rm -rf "$uninstall_root"
 trap - EXIT
+
+# A regex interval whose upper bound exceeds RE_DUP_MAX is invalid on some
+# platforms, where the match then silently evaluates as false rather than
+# raising. Keep bounds small and check longer lengths explicitly.
+if grep -REn '\{[0-9]+,(2[6-9][0-9]|[3-9][0-9]{2}|[0-9]{4,})\}' "$ROOT/src"; then
+  echo "Regex interval upper bound above 255 is not portable" >&2
+  exit 1
+fi
 
 # The manifest heredoc is unquoted so it can expand payload variables, which
 # means a stray backtick would be executed instead of written.

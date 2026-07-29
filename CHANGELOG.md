@@ -5,6 +5,31 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29f]
+
+### Fixed
+
+- The ports check verified the *container* port against the host's listening
+  sockets instead of the *published host* port. Any container mapped from one
+  port to another, such as Nextcloud AIO publishing 8080 on 7282, was reported
+  as broken while being perfectly reachable. Found by the first dry run on a
+  real host, before a single notification had been sent.
+- Ports are now matched per protocol, so a UDP mapping is no longer looked up in
+  a TCP socket table.
+
+## [2026.07.29e]
+
+### Fixed
+
+- Notifications were never sent on a fresh install. The installer always writes
+  an `ntfy.conf`, and the fallback to the Container Breakglass credentials keyed
+  on that file merely existing, so an empty own configuration permanently
+  shadowed a working one. Each candidate is now accepted only once it yields a
+  usable URL and a plausible token.
+- Replaced a token length check that used a regex interval with an upper bound
+  above `RE_DUP_MAX`. On platforms with the lower limit the expression is
+  invalid and evaluates as false, so a valid token was rejected.
+
 ## [2026.07.29d]
 
 ### Fixed

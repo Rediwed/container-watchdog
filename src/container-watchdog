@@ -344,7 +344,7 @@ inspect_container() {
   inspect_state=""; inspect_health=""; inspect_networks=""
   inspect_expected_ports=""; inspect_active_ports=""; inspect_network_mode=""
   raw=$("$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" inspect "$name" --format \
-    '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}}~{{$v.IPAddress}} {{end}}|{{range $p, $b := .HostConfig.PortBindings}}{{$p}} {{end}}|{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}|{{.HostConfig.NetworkMode}}' 2>/dev/null) || return 1
+    '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}}~{{$v.IPAddress}} {{end}}|{{range $p, $b := .HostConfig.PortBindings}}{{$p}} {{end}}|{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{range $b}}{{.HostPort}}~{{$p}} {{end}}{{end}}{{end}}|{{.HostConfig.NetworkMode}}' 2>/dev/null) || return 1
   IFS='|' read -r inspect_state inspect_health inspect_networks \
     inspect_expected_ports inspect_active_ports inspect_network_mode <<< "$raw"
   return 0
@@ -428,10 +428,15 @@ run_checks() {
           check_fault=detached
           return 1
         fi
-        local mapping port
+        local mapping port protocol
         for mapping in $inspect_active_ports; do
-          port=${mapping%%/*}
-          [[ "$mapping" == */tcp ]] || continue
+          # Entries are hostport~containerport/protocol. The published host port
+          # is what has to be reachable, and it frequently differs from the
+          # container port, so checking the container port would be meaningless.
+          port=${mapping%%~*}
+          protocol=${mapping##*/}
+          [[ "$protocol" == tcp ]] || continue
+          [[ "$port" =~ ^[0-9]+$ ]] || continue
           if ! host_listening "$port"; then
             check_reason="port-$port-not-listening"
             check_fault=unhealthy

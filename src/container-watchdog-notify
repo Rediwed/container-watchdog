@@ -10,6 +10,10 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CONFIG_FILE="${WATCHDOG_NTFY_CONFIG:-/boot/config/plugins/container-watchdog/ntfy.conf}"
 FALLBACK_CONFIG="${WATCHDOG_NTFY_FALLBACK_CONFIG:-/boot/config/plugins/container-breakglass/ntfy.conf}"
 RUNTIME_DIR="${WATCHDOG_RUNTIME_DIR:-/run/container-watchdog}"
+# Named explicitly so the hardened PATH above stays authoritative while tests can
+# substitute stubs.
+TIMEOUT_TOOL="${WATCHDOG_TIMEOUT_TOOL:-timeout}"
+CURL_TOOL="${WATCHDOG_CURL_TOOL:-curl}"
 
 MESSAGE=${1:-}
 if [[ -z "$MESSAGE" && ! -t 0 ]]; then
@@ -17,30 +21,42 @@ if [[ -z "$MESSAGE" && ! -t 0 ]]; then
 fi
 [[ -n "$MESSAGE" ]] || exit 0
 
-if [[ ! -f "$CONFIG_FILE" || -L "$CONFIG_FILE" ]]; then
-  CONFIG_FILE=$FALLBACK_CONFIG
-fi
-[[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]] || exit 0
-
 read_config() {
-  local key=$1 line
-  line=$(grep -m1 -E "^${key}=" "$CONFIG_FILE" 2>/dev/null) || return 1
+  local file=$1 key=$2 line
+  line=$(grep -m1 -E "^${key}=" "$file" 2>/dev/null) || return 1
   printf '%s\n' "${line#*=}"
 }
 
-NTFY_URL=$(read_config NTFY_URL || true)
-NTFY_TOKEN_FILE=$(read_config NTFY_TOKEN_FILE || true)
-if [[ "$NTFY_URL" =~ ^https://[A-Za-z0-9._:-]+/[A-Za-z0-9._~-]+$ ]]; then
-  :
-elif [[ "${WATCHDOG_NTFY_ALLOW_HTTP:-0}" == 1 \
-    && "$NTFY_URL" =~ ^http://127\.0\.0\.1:[0-9]{1,5}/[A-Za-z0-9._~-]+$ ]]; then
-  :
-else
-  exit 0
-fi
-[[ "$NTFY_TOKEN_FILE" == /* && -f "$NTFY_TOKEN_FILE" && ! -L "$NTFY_TOKEN_FILE" ]] || exit 0
-TOKEN=$(head -n 1 "$NTFY_TOKEN_FILE" 2>/dev/null)
-[[ "$TOKEN" =~ ^[A-Za-z0-9._~-]{16,512}$ ]] || exit 0
+usable_url() {
+  local url=$1
+  [[ "$url" =~ ^https://[A-Za-z0-9._:-]+/[A-Za-z0-9._~-]+$ ]] && return 0
+  [[ "${WATCHDOG_NTFY_ALLOW_HTTP:-0}" == 1 \
+    && "$url" =~ ^http://127\.0\.0\.1:[0-9]{1,5}/[A-Za-z0-9._~-]+$ ]] && return 0
+  return 1
+}
+
+# The installer writes an empty configuration so the file always exists. Falling
+# back on existence alone would therefore never reach the Breakglass credentials,
+# so each candidate is accepted only once it yields a usable URL and token.
+NTFY_URL=""
+TOKEN=""
+for candidate in "$CONFIG_FILE" "$FALLBACK_CONFIG"; do
+  [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+  url=$(read_config "$candidate" NTFY_URL || true)
+  token_file=$(read_config "$candidate" NTFY_TOKEN_FILE || true)
+  usable_url "$url" || continue
+  [[ "$token_file" == /* && -f "$token_file" && ! -L "$token_file" ]] || continue
+  token=$(head -n 1 "$token_file" 2>/dev/null)
+  # Length is checked explicitly rather than with a regex interval: an upper
+  # bound above 255 exceeds RE_DUP_MAX on some platforms, where the expression
+  # then silently evaluates as false instead of matching.
+  [[ "$token" =~ ^[A-Za-z0-9._~-]+$ ]] || continue
+  (( ${#token} >= 16 && ${#token} <= 512 )) || continue
+  NTFY_URL=$url
+  TOKEN=$token
+  break
+done
+[[ -n "$NTFY_URL" && -n "$TOKEN" ]] || exit 0
 
 priority=default
 tags=dog
@@ -87,5 +103,5 @@ show-error
 EOF
 unset TOKEN NTFY_URL
 printf '%s' "$MESSAGE" \
-  | timeout -k 1 6 curl --config "$CURL_CONFIG" --data-binary @- >/dev/null 2>&1 \
+  | "$TIMEOUT_TOOL" -k 1 6 "$CURL_TOOL" --config "$CURL_CONFIG" --data-binary @- >/dev/null 2>&1 \
   || true

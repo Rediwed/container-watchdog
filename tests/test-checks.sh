@@ -23,12 +23,14 @@ export WATCHDOG_TIMEOUT_TOOL="$WORK/bin/timeout"
 mkdir -p "$WATCHDOG_CONFIG_DIR" "$WORK/bin" "$WORK/fixtures"
 
 # state|health|networks|expected_ports|active_ports|network_mode
-printf 'running|healthy|bridge~192.0.2.4 |8091/tcp |8091/tcp |bridge\n' > "$WORK/fixtures/good"
+printf 'running|healthy|bridge~192.0.2.4 |8091/tcp |8091~8091/tcp |bridge\n' > "$WORK/fixtures/good"
 printf 'running|starting|bridge~192.0.2.4 | | |bridge\n' > "$WORK/fixtures/booting"
 printf 'running|healthy|| | |redman-docker-api\n' > "$WORK/fixtures/detached"
 printf 'running|healthy|bridge~ | | |bridge\n' > "$WORK/fixtures/no-address"
 printf 'running|healthy|bridge~192.0.2.4 |8091/tcp | |bridge\n' > "$WORK/fixtures/unpublished"
-printf 'running|healthy|bridge~192.0.2.4 |9999/tcp |9999/tcp |bridge\n' > "$WORK/fixtures/silent-port"
+printf 'running|healthy|bridge~192.0.2.4 |9999/tcp |9999~9999/tcp |bridge\n' > "$WORK/fixtures/silent-port"
+printf 'running|healthy|bridge~192.0.2.4 |8080/tcp |8091~8080/tcp |bridge\n' > "$WORK/fixtures/remapped"
+printf 'running|healthy|bridge~192.0.2.4 |53/udp |5353~53/udp |bridge\n' > "$WORK/fixtures/udp-only"
 printf 'running|unhealthy|bridge~192.0.2.4 | | |bridge\n' > "$WORK/fixtures/sick"
 printf 'exited|none|| | |bridge\n' > "$WORK/fixtures/stopped"
 printf 'running|healthy|other~192.0.2.20 | | |other\n' > "$WORK/fixtures/wrong-network"
@@ -92,6 +94,8 @@ container=sick
 container=stopped
 container=wrong-network networks=known-network
 container=host-mode
+container=remapped
+container=udp-only
 container=absent
 CONFIG
 
@@ -123,6 +127,11 @@ assert_verdict no-address no-address-bridge detached
 # Bindings configured but never published: a restart would not repair this.
 assert_verdict unpublished ports-unpublished detached
 assert_verdict silent-port port-9999-not-listening unhealthy
+# The container port is 8080 but it is published on 8091, which is the one that
+# has to be listening. Checking the container port would report a false fault.
+assert_verdict remapped "" ""
+# Only TCP can be verified with a listening socket table.
+assert_verdict udp-only "" ""
 assert_verdict sick health-unhealthy unhealthy
 assert_verdict stopped state-exited stopped
 assert_verdict wrong-network missing-network-known-network detached

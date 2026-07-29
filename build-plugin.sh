@@ -22,7 +22,7 @@ CSS_FILE="$SCRIPT_DIR/plugin/css/watchdog.css"
 README_FILE="$SCRIPT_DIR/README.md"
 DIST_DIR="$SCRIPT_DIR/dist"
 OUTPUT="$DIST_DIR/container-watchdog.plg"
-VERSION="${1:-2026.07.29d}"
+VERSION="${1:-2026.07.29f}"
 
 for file in "$HOST_SCRIPT" "$NOTIFY_SCRIPT" "$STATUS_SCRIPT" "$CRON_FILE" \
   "$EVENT_FILE" "$REMOVE_SCRIPT" "$EXAMPLE_FILE" "$PAGE_FILE" "$MAIN_PHP_FILE" \
@@ -94,6 +94,19 @@ cat > "$TEMPORARY" <<EOF
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.0.0" icon="dog" pluginURL="https://github.com/Rediwed/container-watchdog/releases/latest/download/container-watchdog.plg">
   <CHANGES>
 ###$VERSION
+- Fixed the ports check testing the container port instead of the published host
+  port. A container mapped from one port to another was reported as broken while
+  it was perfectly reachable.
+
+###2026.07.29e
+- Fixed notifications never being sent on a fresh install. The installer always
+  writes a configuration file, so falling back to the Container Breakglass
+  credentials on file existence alone never happened. Each candidate is now
+  accepted only once it yields a usable URL and token.
+- Replaced a regex length bound that exceeds RE_DUP_MAX on some platforms, where
+  it silently evaluated as false instead of matching.
+
+###2026.07.29d
 - Fixed the web interface refusing every request with an invalid CSRF token.
   Unraid validates the token in a global prepend and then removes it from the
   request, so the endpoint could never match it again. The platform gate is now
