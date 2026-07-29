@@ -1,0 +1,2 @@
+# Check watched containers and repair the ones the operator allowed.
+*/2 * * * * /usr/local/sbin/container-watchdog run >/dev/null 2>&1

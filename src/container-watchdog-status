@@ -1,0 +1,162 @@
+#!/bin/bash
+# Publish a sanitized watchdog summary for read-only dashboard consumers.
+#
+# Deliberately contains no container names, IDs, networks, URLs, or paths, so the
+# file stays safe to expose through an existing dashboard container. The plugin
+# opens no network listener of its own.
+
+set -euo pipefail
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CONFIG_DIR="${WATCHDOG_CONFIG_DIR:-/boot/config/plugins/container-watchdog}"
+CONFIG_FILE="${WATCHDOG_CONFIG_FILE:-$CONFIG_DIR/watch.conf}"
+STATE_DIR="${WATCHDOG_STATE_DIR:-$CONFIG_DIR/state}"
+STATISTICS_FILE="$STATE_DIR/statistics"
+SUSPEND_DIR="$STATE_DIR/suspended"
+RUNTIME_DIR="${WATCHDOG_RUNTIME_DIR:-/run/container-watchdog}"
+COUNTER_DIR="$RUNTIME_DIR/counters"
+PUBLIC_DIR="$RUNTIME_DIR/public"
+STATUS_FILE="$PUBLIC_DIR/status.json"
+STATUS_LOCK_FILE="$RUNTIME_DIR/status.lock"
+FLOCK_TOOL="${WATCHDOG_FLOCK_TOOL:-flock}"
+MAX_COUNT=999999999
+
+valid_count() {
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,8})$ ]] && (( 10#$1 <= MAX_COUNT ))
+}
+
+valid_timestamp() {
+  [[ -z "$1" || "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+}
+
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+[[ ! -L "$RUNTIME_DIR" ]] || exit 1
+install -d -m 0700 "$RUNTIME_DIR"
+[[ -d "$RUNTIME_DIR" && ! -L "$RUNTIME_DIR" ]] || exit 1
+if [[ -L "$PUBLIC_DIR" ]]; then
+  rm -f -- "$PUBLIC_DIR"
+fi
+install -d -m 0755 "$PUBLIC_DIR"
+[[ -d "$PUBLIC_DIR" && ! -L "$PUBLIC_DIR" ]] || exit 1
+chmod 0755 "$PUBLIC_DIR"
+exec 7>"$STATUS_LOCK_FILE"
+"$FLOCK_TOOL" -w 2 7
+
+# ── Durable statistics ──
+
+history_status="Ready"
+checks_failed=0
+repairs=0
+repairs_failed=0
+suspensions=0
+last_failure_at=""
+last_repair_at=""
+last_repair_action=""
+
+load_statistics() {
+  local line key value
+  [[ -f "$STATISTICS_FILE" && ! -L "$STATISTICS_FILE" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      format) [[ "$value" == 1 ]] || return 1 ;;
+      checks_failed|repairs|repairs_failed|suspensions)
+        valid_count "$value" || return 1
+        printf -v "$key" '%s' "$value"
+        ;;
+      last_failure_at|last_repair_at)
+        valid_timestamp "$value" || return 1
+        printf -v "$key" '%s' "$value"
+        ;;
+      last_repair_action)
+        [[ -z "$value" || "$value" =~ ^(start|restart|reattach)$ ]] || return 1
+        last_repair_action=$value
+        ;;
+      *) return 1 ;;
+    esac
+  done < "$STATISTICS_FILE"
+  return 0
+}
+
+if [[ -e "$STATISTICS_FILE" || -L "$STATISTICS_FILE" ]]; then
+  if ! load_statistics; then
+    history_status="Unavailable"
+    checks_failed=0
+    repairs=0
+    repairs_failed=0
+    suspensions=0
+    last_failure_at=""
+    last_repair_at=""
+    last_repair_action=""
+  fi
+fi
+
+# ── Live aggregates ──
+
+watched=0
+if [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line=${line%%#*}
+    line=$(printf '%s' "$line" | tr -s '[:space:]' ' ')
+    line=${line# }
+    line=${line% }
+    [[ "$line" == container=* ]] || continue
+    watched=$(( watched + 1 ))
+  done < "$CONFIG_FILE"
+fi
+
+failing=0
+if [[ -d "$COUNTER_DIR" && ! -L "$COUNTER_DIR" ]]; then
+  while IFS= read -r file; do
+    [[ -f "$file" && ! -L "$file" ]] || continue
+    if grep -qx 'last_verdict=fail' "$file" 2>/dev/null; then
+      failing=$(( failing + 1 ))
+    fi
+  done < <(find "$COUNTER_DIR" -maxdepth 1 -type f 2>/dev/null)
+fi
+
+suspended=0
+if [[ -d "$SUSPEND_DIR" && ! -L "$SUSPEND_DIR" ]]; then
+  suspended=$(find "$SUSPEND_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+  valid_count "$suspended" || suspended=0
+fi
+
+if [[ "$history_status" == "Unavailable" ]]; then
+  status="Unavailable"
+elif (( watched == 0 )); then
+  status="Idle"
+elif (( suspended > 0 )); then
+  status="Suspended"
+elif (( failing > 0 )); then
+  status="Degraded"
+else
+  status="Ready"
+fi
+
+updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+TEMPORARY=$(mktemp "$PUBLIC_DIR/.status.XXXXXX")
+trap 'rm -f "$TEMPORARY"' EXIT
+cat > "$TEMPORARY" <<EOF
+{
+  "status": "$(json_escape "$status")",
+  "watched": $watched,
+  "failing": $failing,
+  "suspended": $suspended,
+  "checks_failed": $checks_failed,
+  "repairs": $repairs,
+  "repairs_failed": $repairs_failed,
+  "suspensions": $suspensions,
+  "last_failure": "$(json_escape "$last_failure_at")",
+  "last_repair": "$(json_escape "$last_repair_at")",
+  "last_repair_action": "$(json_escape "$last_repair_action")",
+  "updated_at": "$updated_at"
+}
+EOF
+chmod 0644 "$TEMPORARY"
+mv -f "$TEMPORARY" "$STATUS_FILE"
+trap - EXIT

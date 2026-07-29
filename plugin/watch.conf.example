@@ -1,0 +1,76 @@
+# Container Watchdog — watched containers
+#
+# One record per line. Every token is KEY=VALUE and the first token must be
+# container=. A malformed line is skipped and logged; it is never guessed at.
+# Nothing is watched until you add records here.
+#
+#   container=NAME       Exact container name. Required.
+#   checks=LIST          Comma separated: running, health, network, ports, http.
+#                        Default: running,health,network,ports
+#   action=LEVEL         notify   report only, never touch the container
+#                        restart  may start a stopped container and restart a
+#                                 broken one
+#                        reattach everything restart does, plus reconnecting a
+#                                 container that lost its Docker network
+#                        Default: notify
+#   networks=LIST        Comma separated networks that must stay attached.
+#                        Required when action=reattach.
+#   threshold=N          Consecutive failed cycles before acting. Default 3.
+#   cooldown=SECONDS     Minimum gap between repairs. Default 600, minimum 60.
+#   max_actions=N        Repairs allowed per window before the container is
+#                        suspended into notify-only. Default 3.
+#   window=SECONDS       Length of that rolling window. Default 3600.
+#   http=URL             Optional probe. Only used when checks includes http.
+#   http_status=CODE     Expected status for that probe. Default 200.
+#
+# The checks are deliberately cheap and read-only. The network and ports checks
+# exist because a container can report healthy while having no interface beyond
+# loopback: its health probe passes over localhost while every outbound call
+# fails and no published port is reachable. A plain restart does not repair that
+# state, which is why reattach exists.
+#
+# A container latched by Container Breakglass, or covered by an armed deployment
+# guard, is reported but never touched regardless of the action set here.
+
+# ── Examples ──
+#
+# RedMan lost its bridge attachment after an unclean boot and stayed "healthy"
+# for two days while every peer call failed. Full checks plus reattach.
+#
+# container=redman action=reattach networks=redman-docker-api
+#
+# Its sidecars share the same network but publish no ports.
+#
+# container=redman-docker-socket-proxy action=restart checks=running,network networks=redman-docker-api
+# container=redman-docker-control-proxy action=restart checks=running,network networks=redman-docker-api
+#
+# Nextcloud AIO manages its own child containers. Watch the master container,
+# and keep the children on notify so the watchdog never fights the manager.
+#
+# container=nextcloud-aio-mastercontainer action=restart
+# container=nextcloud-aio-nextcloud action=notify
+# container=nextcloud-aio-database action=notify
+# container=nextcloud-aio-apache action=notify
+# container=nextcloud-aio-redis action=notify
+# container=nextcloud-aio-notify-push action=notify
+# container=nextcloud-aio-collabora action=notify
+# container=nextcloud-aio-imaginary action=notify
+# container=nextcloud-aio-whiteboard action=notify
+#
+# A service that is known to flap should stay on notify, otherwise the watchdog
+# spends its repair budget on a problem it cannot fix.
+#
+# container=nextcloud-aio-fulltextsearch action=notify
+#
+# Photo and backup services: restart is safe, they have no external manager.
+#
+# container=Immich action=restart
+# container=Immich_PostgreSQL action=restart
+# container=TimeMachine action=restart checks=running
+#
+# Dashboards and tunnels. A tunnel client is worth an HTTP probe because a dead
+# tunnel usually keeps its process alive.
+#
+# container=homepage action=restart http=http://127.0.0.1:3000/ checks=running,health,network,ports,http
+# container=newt action=restart checks=running
+# container=wireguard-client action=restart checks=running

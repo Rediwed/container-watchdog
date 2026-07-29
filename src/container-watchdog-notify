@@ -1,0 +1,90 @@
+#!/bin/bash
+# Best-effort ntfy notifier for Container Watchdog. Never blocks remediation.
+#
+# Reads its own configuration when present, and otherwise falls back to the
+# Container Breakglass configuration so a host only needs one ntfy token.
+
+set -u
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CONFIG_FILE="${WATCHDOG_NTFY_CONFIG:-/boot/config/plugins/container-watchdog/ntfy.conf}"
+FALLBACK_CONFIG="${WATCHDOG_NTFY_FALLBACK_CONFIG:-/boot/config/plugins/container-breakglass/ntfy.conf}"
+RUNTIME_DIR="${WATCHDOG_RUNTIME_DIR:-/run/container-watchdog}"
+
+MESSAGE=${1:-}
+if [[ -z "$MESSAGE" && ! -t 0 ]]; then
+  MESSAGE=$(cat)
+fi
+[[ -n "$MESSAGE" ]] || exit 0
+
+if [[ ! -f "$CONFIG_FILE" || -L "$CONFIG_FILE" ]]; then
+  CONFIG_FILE=$FALLBACK_CONFIG
+fi
+[[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]] || exit 0
+
+read_config() {
+  local key=$1 line
+  line=$(grep -m1 -E "^${key}=" "$CONFIG_FILE" 2>/dev/null) || return 1
+  printf '%s\n' "${line#*=}"
+}
+
+NTFY_URL=$(read_config NTFY_URL || true)
+NTFY_TOKEN_FILE=$(read_config NTFY_TOKEN_FILE || true)
+if [[ "$NTFY_URL" =~ ^https://[A-Za-z0-9._:-]+/[A-Za-z0-9._~-]+$ ]]; then
+  :
+elif [[ "${WATCHDOG_NTFY_ALLOW_HTTP:-0}" == 1 \
+    && "$NTFY_URL" =~ ^http://127\.0\.0\.1:[0-9]{1,5}/[A-Za-z0-9._~-]+$ ]]; then
+  :
+else
+  exit 0
+fi
+[[ "$NTFY_TOKEN_FILE" == /* && -f "$NTFY_TOKEN_FILE" && ! -L "$NTFY_TOKEN_FILE" ]] || exit 0
+TOKEN=$(head -n 1 "$NTFY_TOKEN_FILE" 2>/dev/null)
+[[ "$TOKEN" =~ ^[A-Za-z0-9._~-]{16,512}$ ]] || exit 0
+
+priority=default
+tags=dog
+case "$MESSAGE" in
+  *action=repair-failed*|*result=failed*)
+    priority=urgent
+    tags=rotating_light
+    ;;
+  *action=suspended*)
+    priority=high
+    tags=mute
+    ;;
+  *action=repaired*)
+    priority=high
+    tags=wrench
+    ;;
+  *action=degraded*|*action=blocked*)
+    priority=high
+    tags=warning
+    ;;
+  *action=recovered*|*action=resumed*)
+    tags=white_check_mark
+    ;;
+esac
+
+host=$(hostname -s 2>/dev/null || hostname)
+mkdir -p "$RUNTIME_DIR"
+chmod 0700 "$RUNTIME_DIR"
+CURL_CONFIG=$(mktemp "$RUNTIME_DIR/.ntfy.XXXXXX") || exit 0
+trap 'rm -f "$CURL_CONFIG"' EXIT
+chmod 0600 "$CURL_CONFIG"
+cat > "$CURL_CONFIG" <<EOF
+url = "$NTFY_URL"
+header = "Authorization: Bearer $TOKEN"
+header = "Title: Container Watchdog - $host"
+header = "Priority: $priority"
+header = "Tags: $tags"
+connect-timeout = 2
+max-time = 5
+fail
+silent
+show-error
+EOF
+unset TOKEN NTFY_URL
+printf '%s' "$MESSAGE" \
+  | timeout -k 1 6 curl --config "$CURL_CONFIG" --data-binary @- >/dev/null 2>&1 \
+  || true

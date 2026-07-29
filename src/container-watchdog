@@ -1,0 +1,723 @@
+#!/bin/bash
+# Container Watchdog for Unraid — detects and repairs containers that are up but broken.
+#
+# Deliberately narrow: it may start, restart, and reattach an exact, pre-approved
+# container to an exact, pre-approved network. It never creates or removes
+# containers, images, volumes, or networks, and never executes anything inside a
+# container. Stop and kill are delegated to Container Breakglass so those actions
+# go through the audited path and leave a persistent latch.
+
+set -u
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+CONFIG_DIR="${WATCHDOG_CONFIG_DIR:-/boot/config/plugins/container-watchdog}"
+CONFIG_FILE="${WATCHDOG_CONFIG_FILE:-$CONFIG_DIR/watch.conf}"
+STATE_DIR="${WATCHDOG_STATE_DIR:-$CONFIG_DIR/state}"
+STATISTICS_FILE="$STATE_DIR/statistics"
+SUSPEND_DIR="$STATE_DIR/suspended"
+RUNTIME_DIR="${WATCHDOG_RUNTIME_DIR:-/run/container-watchdog}"
+COUNTER_DIR="$RUNTIME_DIR/counters"
+RUN_LOCK_FILE="$RUNTIME_DIR/run.lock"
+NOTIFY_TOOL="${WATCHDOG_NOTIFY_TOOL:-/usr/local/sbin/container-watchdog-notify}"
+STATUS_TOOL="${WATCHDOG_STATUS_TOOL:-/usr/local/sbin/container-watchdog-status}"
+BREAKGLASS_TOOL="${WATCHDOG_BREAKGLASS_TOOL:-/usr/local/sbin/container-breakglass}"
+GUARD_TOOL="${WATCHDOG_GUARD_TOOL:-/usr/local/sbin/container-deploy-guard}"
+DOCKER_TOOL="${WATCHDOG_DOCKER_TOOL:-docker}"
+FLOCK_TOOL="${WATCHDOG_FLOCK_TOOL:-flock}"
+# Every external helper is named explicitly so the hardened PATH above stays
+# authoritative in production while tests can substitute hermetic stubs.
+TIMEOUT_TOOL="${WATCHDOG_TIMEOUT_TOOL:-timeout}"
+SS_TOOL="${WATCHDOG_SS_TOOL:-ss}"
+CURL_TOOL="${WATCHDOG_CURL_TOOL:-curl}"
+LOG_TAG=container-watchdog
+
+DEFAULT_CHECKS="running,health,network,ports"
+DEFAULT_ACTION=notify
+DEFAULT_THRESHOLD=3
+DEFAULT_COOLDOWN=600
+DEFAULT_MAX_ACTIONS=3
+DEFAULT_WINDOW=3600
+DEFAULT_HTTP_STATUS=200
+DOCKER_TIMEOUT=15
+ACTION_TIMEOUT=120
+
+# ── Logging and notification ──
+
+log() {
+  logger -t "$LOG_TAG" -- "$*" 2>/dev/null || true
+}
+
+notify() {
+  # Notification must never delay or fail remediation.
+  [[ -x "$NOTIFY_TOOL" ]] || return 0
+  printf '%s' "$1" | "$TIMEOUT_TOOL" -k 1 8 "$NOTIFY_TOOL" >/dev/null 2>&1 || true
+}
+
+report() {
+  # report ACTION CONTAINER RESULT DETAIL
+  local action=$1 container=$2 result=$3 detail=${4:-}
+  local line="action=$action container=$container result=$result"
+  [[ -n "$detail" ]] && line+=" detail=$detail"
+  log "$line"
+  notify "$line"
+}
+
+refresh_status() {
+  [[ -x "$STATUS_TOOL" ]] || return 0
+  "$TIMEOUT_TOOL" -k 1 10 "$STATUS_TOOL" >/dev/null 2>&1 || true
+}
+
+# ── Validation ──
+
+valid_name() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]
+}
+
+valid_network() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]
+}
+
+valid_number() {
+  [[ "${1:-}" =~ ^[0-9]{1,7}$ ]]
+}
+
+valid_url() {
+  [[ "${1:-}" =~ ^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?=&%-]*)?$ ]]
+}
+
+# ── Configuration ──
+
+# Populated by read_record for the container currently being processed.
+record_container=""
+record_checks=""
+record_action=""
+record_networks=""
+record_threshold=""
+record_cooldown=""
+record_max_actions=""
+record_window=""
+record_http=""
+record_http_status=""
+
+reset_record() {
+  record_container=""
+  record_checks=$DEFAULT_CHECKS
+  record_action=$DEFAULT_ACTION
+  record_networks=""
+  record_threshold=$DEFAULT_THRESHOLD
+  record_cooldown=$DEFAULT_COOLDOWN
+  record_max_actions=$DEFAULT_MAX_ACTIONS
+  record_window=$DEFAULT_WINDOW
+  record_http=""
+  record_http_status=$DEFAULT_HTTP_STATUS
+}
+
+# Parses one configuration line into the record_* variables.
+# Returns non-zero for any malformed line so a bad record is skipped, never guessed.
+read_record() {
+  local line=$1 token key value
+  reset_record
+  for token in $line; do
+    key=${token%%=*}
+    value=${token#*=}
+    [[ "$token" == *=* ]] || return 1
+    case "$key" in
+      container)
+        valid_name "$value" || return 1
+        record_container=$value
+        ;;
+      checks)
+        [[ "$value" =~ ^[a-z]+(,[a-z]+)*$ ]] || return 1
+        local item
+        for item in ${value//,/ }; do
+          case "$item" in
+            running|health|network|ports|http) ;;
+            *) return 1 ;;
+          esac
+        done
+        record_checks=$value
+        ;;
+      action)
+        [[ "$value" =~ ^(notify|restart|reattach)$ ]] || return 1
+        record_action=$value
+        ;;
+      networks)
+        [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.,-]*$ ]] || return 1
+        local net
+        for net in ${value//,/ }; do
+          valid_network "$net" || return 1
+        done
+        record_networks=$value
+        ;;
+      threshold)
+        valid_number "$value" && (( value >= 1 && value <= 100 )) || return 1
+        record_threshold=$value
+        ;;
+      cooldown)
+        valid_number "$value" && (( value >= 60 && value <= 86400 )) || return 1
+        record_cooldown=$value
+        ;;
+      max_actions)
+        valid_number "$value" && (( value >= 1 && value <= 20 )) || return 1
+        record_max_actions=$value
+        ;;
+      window)
+        valid_number "$value" && (( value >= 300 && value <= 86400 )) || return 1
+        record_window=$value
+        ;;
+      http)
+        valid_url "$value" || return 1
+        record_http=$value
+        ;;
+      http_status)
+        valid_number "$value" && (( value >= 100 && value <= 599 )) || return 1
+        record_http_status=$value
+        ;;
+      *) return 1 ;;
+    esac
+  done
+  [[ -n "$record_container" ]] || return 1
+  # Reattach needs to know which networks are expected; without that it cannot act.
+  if [[ "$record_action" == reattach && -z "$record_networks" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# Emits every valid configuration line. Invalid lines are logged and skipped.
+each_record() {
+  local line number=0
+  [[ -f "$CONFIG_FILE" && ! -L "$CONFIG_FILE" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    number=$(( number + 1 ))
+    line=${line%%#*}
+    line=$(printf '%s' "$line" | tr -s '[:space:]' ' ')
+    line=${line# }
+    line=${line% }
+    [[ -n "$line" ]] || continue
+    if ! read_record "$line"; then
+      log "action=config container=- result=invalid detail=line-$number"
+      continue
+    fi
+    printf '%s\n' "$line"
+  done < "$CONFIG_FILE"
+}
+
+# ── Runtime counters ──
+
+counter_fails=0
+counter_actions=0
+counter_window_start=0
+counter_last_action=0
+counter_last_verdict=""
+
+load_counters() {
+  local file="$COUNTER_DIR/$1" line key value
+  counter_fails=0
+  counter_actions=0
+  counter_window_start=0
+  counter_last_action=0
+  counter_last_verdict=""
+  [[ -f "$file" && ! -L "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      fails) valid_number "$value" && counter_fails=$value ;;
+      actions) valid_number "$value" && counter_actions=$value ;;
+      window_start) [[ "$value" =~ ^[0-9]{1,12}$ ]] && counter_window_start=$value ;;
+      last_action) [[ "$value" =~ ^[0-9]{1,12}$ ]] && counter_last_action=$value ;;
+      last_verdict) [[ "$value" =~ ^(ok|fail)$ ]] && counter_last_verdict=$value ;;
+    esac
+  done < "$file"
+}
+
+save_counters() {
+  local name=$1 file="$COUNTER_DIR/$1" temporary
+  install -d -m 0700 "$COUNTER_DIR" 2>/dev/null || return 0
+  temporary=$(mktemp "$COUNTER_DIR/.$name.XXXXXX") || return 0
+  {
+    printf 'fails=%s\n' "$counter_fails"
+    printf 'actions=%s\n' "$counter_actions"
+    printf 'window_start=%s\n' "$counter_window_start"
+    printf 'last_action=%s\n' "$counter_last_action"
+    printf 'last_verdict=%s\n' "$counter_last_verdict"
+  } > "$temporary"
+  chmod 0600 "$temporary"
+  mv -f "$temporary" "$file" 2>/dev/null || rm -f "$temporary"
+}
+
+# ── Durable statistics ──
+
+record_statistic() {
+  # record_statistic FIELD — appends to a small flash-backed counter file.
+  # Written only on real events so the flash device is not touched every cycle.
+  local field=$1 line key value temporary
+  local checks_failed=0 repairs=0 repairs_failed=0 suspensions=0
+  local last_failure_at="" last_repair_at="" last_repair_action=""
+  install -d -m 0700 "$STATE_DIR" 2>/dev/null || return 0
+  if [[ -f "$STATISTICS_FILE" && ! -L "$STATISTICS_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      key=${line%%=*}
+      value=${line#*=}
+      case "$key" in
+        checks_failed) valid_number "$value" && checks_failed=$value ;;
+        repairs) valid_number "$value" && repairs=$value ;;
+        repairs_failed) valid_number "$value" && repairs_failed=$value ;;
+        suspensions) valid_number "$value" && suspensions=$value ;;
+        last_failure_at) last_failure_at=$value ;;
+        last_repair_at) last_repair_at=$value ;;
+        last_repair_action) last_repair_action=$value ;;
+      esac
+    done < "$STATISTICS_FILE"
+  fi
+  local now
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  case "$field" in
+    checks_failed) checks_failed=$(( checks_failed + 1 )); last_failure_at=$now ;;
+    repairs) repairs=$(( repairs + 1 )); last_repair_at=$now; last_repair_action=${2:-} ;;
+    repairs_failed) repairs_failed=$(( repairs_failed + 1 )); last_repair_at=$now; last_repair_action=${2:-} ;;
+    suspensions) suspensions=$(( suspensions + 1 )) ;;
+  esac
+  temporary=$(mktemp "$STATE_DIR/.statistics.XXXXXX") || return 0
+  {
+    printf 'format=1\n'
+    printf 'checks_failed=%s\n' "$checks_failed"
+    printf 'repairs=%s\n' "$repairs"
+    printf 'repairs_failed=%s\n' "$repairs_failed"
+    printf 'suspensions=%s\n' "$suspensions"
+    printf 'last_failure_at=%s\n' "$last_failure_at"
+    printf 'last_repair_at=%s\n' "$last_repair_at"
+    printf 'last_repair_action=%s\n' "$last_repair_action"
+  } > "$temporary"
+  chmod 0600 "$temporary"
+  mv -f "$temporary" "$STATISTICS_FILE" 2>/dev/null || rm -f "$temporary"
+}
+
+# ── Breakglass integration ──
+
+# A container the operator deliberately stopped through Breakglass must never be
+# restarted here. Absence of the tool means no latch can exist.
+is_latched() {
+  local name=$1 output
+  [[ -x "$BREAKGLASS_TOOL" ]] || return 1
+  output=$("$TIMEOUT_TOOL" -k 1 10 "$BREAKGLASS_TOOL" status "$name" 2>/dev/null) || return 1
+  [[ "$output" == *"latched=yes"* ]]
+}
+
+# A deployment in progress owns the container; the watchdog stays out of the way.
+is_guarded() {
+  local name=$1 output
+  [[ -x "$GUARD_TOOL" ]] || return 1
+  output=$("$TIMEOUT_TOOL" -k 1 10 "$GUARD_TOOL" status "$name" 2>/dev/null) || return 1
+  [[ "$output" == *"armed=yes"* ]]
+}
+
+is_suspended() {
+  [[ -f "$SUSPEND_DIR/$1" ]]
+}
+
+suspend_container() {
+  local name=$1 reason=$2
+  install -d -m 0700 "$SUSPEND_DIR" 2>/dev/null || return 1
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$reason" > "$SUSPEND_DIR/$name"
+  chmod 0600 "$SUSPEND_DIR/$name" 2>/dev/null || true
+  record_statistic suspensions
+}
+
+# ── Inspection ──
+
+inspect_state=""
+inspect_health=""
+inspect_networks=""
+inspect_expected_ports=""
+inspect_active_ports=""
+inspect_network_mode=""
+
+inspect_container() {
+  local name=$1 raw
+  inspect_state=""; inspect_health=""; inspect_networks=""
+  inspect_expected_ports=""; inspect_active_ports=""; inspect_network_mode=""
+  raw=$("$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" inspect "$name" --format \
+    '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}}~{{$v.IPAddress}} {{end}}|{{range $p, $b := .HostConfig.PortBindings}}{{$p}} {{end}}|{{range $p, $b := .NetworkSettings.Ports}}{{if $b}}{{$p}} {{end}}{{end}}|{{.HostConfig.NetworkMode}}' 2>/dev/null) || return 1
+  IFS='|' read -r inspect_state inspect_health inspect_networks \
+    inspect_expected_ports inspect_active_ports inspect_network_mode <<< "$raw"
+  return 0
+}
+
+host_listening() {
+  # host_listening PORT — true when any socket listens on the given TCP port.
+  local port=$1
+  "$SS_TOOL" -lnt 2>/dev/null | awk -v port=":$port" 'NR > 1 { if (index($4, port) && substr($4, length($4) - length(port) + 1) == port) found = 1 } END { exit !found }'
+}
+
+# ── Checks ──
+
+# Sets check_reason to a short machine-readable cause, and check_fault to the
+# fault class that drives remediation selection.
+check_reason=""
+check_fault=""
+
+run_checks() {
+  local name=$1 checks=$2 networks=$3 http=$4 http_status=$5
+  check_reason=""
+  check_fault=""
+
+  if ! inspect_container "$name"; then
+    check_reason="not-found"
+    check_fault=missing
+    return 1
+  fi
+
+  local item
+  for item in ${checks//,/ }; do
+    case "$item" in
+      running)
+        if [[ "$inspect_state" != running ]]; then
+          check_reason="state-$inspect_state"
+          check_fault=stopped
+          return 1
+        fi
+        ;;
+      health)
+        if [[ "$inspect_health" != none && "$inspect_health" != healthy && "$inspect_health" != starting ]]; then
+          check_reason="health-$inspect_health"
+          check_fault=unhealthy
+          return 1
+        fi
+        ;;
+      network)
+        # An empty network map means the container has no interface beyond loopback:
+        # it looks healthy from inside while every outbound call fails.
+        if [[ -z "${inspect_networks// /}" && "$inspect_network_mode" != host && "$inspect_network_mode" != none ]]; then
+          check_reason="no-network"
+          check_fault=detached
+          return 1
+        fi
+        local entry network address
+        for entry in $inspect_networks; do
+          network=${entry%%~*}
+          address=${entry#*~}
+          if [[ -z "$address" ]]; then
+            check_reason="no-address-$network"
+            check_fault=detached
+            return 1
+          fi
+        done
+        # Every network the operator declared must actually be attached.
+        local expected
+        for expected in ${networks//,/ }; do
+          [[ -n "$expected" ]] || continue
+          if [[ " $inspect_networks " != *" $expected~"* ]]; then
+            check_reason="missing-network-$expected"
+            check_fault=detached
+            return 1
+          fi
+        done
+        ;;
+      ports)
+        # Port bindings that Docker configured but never published indicate a
+        # broken network sandbox, which a plain restart does not repair.
+        if [[ -n "${inspect_expected_ports// /}" && -z "${inspect_active_ports// /}" ]]; then
+          check_reason="ports-unpublished"
+          check_fault=detached
+          return 1
+        fi
+        local mapping port
+        for mapping in $inspect_active_ports; do
+          port=${mapping%%/*}
+          [[ "$mapping" == */tcp ]] || continue
+          if ! host_listening "$port"; then
+            check_reason="port-$port-not-listening"
+            check_fault=unhealthy
+            return 1
+          fi
+        done
+        ;;
+      http)
+        [[ -n "$http" ]] || continue
+        local code
+        code=$("$TIMEOUT_TOOL" -k 1 10 "$CURL_TOOL" -s -o /dev/null -w '%{http_code}' --max-time 8 "$http" 2>/dev/null)
+        if [[ "$code" != "$http_status" ]]; then
+          check_reason="http-${code:-000}"
+          check_fault=unhealthy
+          return 1
+        fi
+        ;;
+    esac
+  done
+  return 0
+}
+
+# ── Remediation ──
+
+# Chooses the narrowest repair that can fix the observed fault, bounded by the
+# action the operator allowed for this container.
+select_remedy() {
+  local fault=$1 action=$2
+  case "$fault" in
+    missing) printf 'none\n' ;;
+    stopped)
+      [[ "$action" == notify ]] && printf 'none\n' || printf 'start\n'
+      ;;
+    detached)
+      [[ "$action" == reattach ]] && printf 'reattach\n' || printf 'none\n'
+      ;;
+    unhealthy)
+      [[ "$action" == notify ]] && printf 'none\n' || printf 'restart\n'
+      ;;
+    *) printf 'none\n' ;;
+  esac
+}
+
+do_start() {
+  "$TIMEOUT_TOOL" -k 5 "$ACTION_TIMEOUT" "$DOCKER_TOOL" start "$1" >/dev/null 2>&1
+}
+
+do_restart() {
+  "$TIMEOUT_TOOL" -k 5 "$ACTION_TIMEOUT" "$DOCKER_TOOL" restart "$1" >/dev/null 2>&1
+}
+
+# Reattaching requires the container to be stopped: connecting a running
+# container leaves its published ports unmapped, which is the very fault we fix.
+do_reattach() {
+  local name=$1 networks=$2 network
+  "$TIMEOUT_TOOL" -k 5 "$ACTION_TIMEOUT" "$DOCKER_TOOL" stop "$name" >/dev/null 2>&1 || return 1
+  for network in ${networks//,/ }; do
+    [[ -n "$network" ]] || continue
+    valid_network "$network" || return 1
+    if ! "$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" network inspect "$network" >/dev/null 2>&1; then
+      return 1
+    fi
+    "$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" network connect "$network" "$name" >/dev/null 2>&1 || true
+  done
+  do_start "$name"
+}
+
+apply_remedy() {
+  local name=$1 remedy=$2 networks=$3
+  case "$remedy" in
+    start) do_start "$name" ;;
+    restart) do_restart "$name" ;;
+    reattach) do_reattach "$name" "$networks" ;;
+    *) return 1 ;;
+  esac
+}
+
+# ── Main evaluation ──
+
+evaluate() {
+  local name=$1 checks=$2 action=$3 networks=$4 threshold=$5 cooldown=$6
+  local max_actions=$7 window=$8 http=$9 http_status=${10} dry_run=${11:-0}
+  local now healthy=0
+
+  now=$(date +%s)
+  load_counters "$name"
+
+  if run_checks "$name" "$checks" "$networks" "$http" "$http_status"; then
+    healthy=1
+  fi
+
+  if (( healthy == 1 )); then
+    if [[ "$counter_last_verdict" == fail ]]; then
+      report recovered "$name" ok "checks=$checks"
+    fi
+    counter_fails=0
+    counter_last_verdict=ok
+    (( dry_run == 0 )) && save_counters "$name"
+    printf 'container=%s verdict=ok\n' "$name"
+    return 0
+  fi
+
+  counter_fails=$(( counter_fails + 1 ))
+  counter_last_verdict=fail
+  printf 'container=%s verdict=fail reason=%s fault=%s fails=%s\n' \
+    "$name" "$check_reason" "$check_fault" "$counter_fails"
+
+  if (( dry_run == 1 )); then
+    return 1
+  fi
+
+  if (( counter_fails == threshold )); then
+    record_statistic checks_failed
+  fi
+  save_counters "$name"
+
+  # Below the threshold a single bad sample is treated as noise.
+  (( counter_fails >= threshold )) || return 1
+
+  if is_latched "$name"; then
+    report blocked "$name" latched "reason=$check_reason"
+    return 1
+  fi
+  if is_guarded "$name"; then
+    log "action=blocked container=$name result=guarded reason=$check_reason"
+    return 1
+  fi
+  if is_suspended "$name"; then
+    report blocked "$name" suspended "reason=$check_reason"
+    return 1
+  fi
+
+  local remedy
+  remedy=$(select_remedy "$check_fault" "$action")
+  if [[ "$remedy" == none ]]; then
+    report degraded "$name" "notify-only" "reason=$check_reason"
+    return 1
+  fi
+
+  if (( now - counter_last_action < cooldown )); then
+    log "action=deferred container=$name result=cooldown reason=$check_reason"
+    return 1
+  fi
+
+  # Rolling window keeps a persistently broken container from being restarted forever.
+  if (( now - counter_window_start >= window )); then
+    counter_window_start=$now
+    counter_actions=0
+  fi
+  if (( counter_actions >= max_actions )); then
+    suspend_container "$name" "exceeded $max_actions repairs per ${window}s"
+    report suspended "$name" "repair-limit" "reason=$check_reason"
+    save_counters "$name"
+    return 1
+  fi
+
+  counter_actions=$(( counter_actions + 1 ))
+  counter_last_action=$now
+  save_counters "$name"
+
+  if apply_remedy "$name" "$remedy" "$networks"; then
+    counter_fails=0
+    save_counters "$name"
+    record_statistic repairs "$remedy"
+    report repaired "$name" ok "remedy=$remedy reason=$check_reason"
+  else
+    record_statistic repairs_failed "$remedy"
+    report repair-failed "$name" failed "remedy=$remedy reason=$check_reason"
+  fi
+  return 1
+}
+
+process_all() {
+  local dry_run=${1:-0} line
+  # A dead Docker daemon would make every container look broken at once.
+  if ! "$TIMEOUT_TOOL" -k 2 "$DOCKER_TIMEOUT" "$DOCKER_TOOL" info >/dev/null 2>&1; then
+    log "action=skip container=- result=docker-unavailable"
+    return 1
+  fi
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    read_record "$line" || continue
+    evaluate "$record_container" "$record_checks" "$record_action" "$record_networks" \
+      "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window" \
+      "$record_http" "$record_http_status" "$dry_run"
+  done < <(each_record)
+  (( dry_run == 0 )) && refresh_status
+  return 0
+}
+
+show_container() {
+  local name=$1 line found=0
+  valid_name "$name" || { echo "Invalid container name" >&2; return 2; }
+  while IFS= read -r line; do
+    read_record "$line" || continue
+    [[ "$record_container" == "$name" ]] || continue
+    found=1
+    load_counters "$name"
+    printf 'container=%s\naction=%s\nchecks=%s\nnetworks=%s\n' \
+      "$record_container" "$record_action" "$record_checks" "${record_networks:--}"
+    printf 'threshold=%s\ncooldown=%s\nmax_actions=%s\nwindow=%s\n' \
+      "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window"
+    printf 'consecutive_failures=%s\nrepairs_in_window=%s\n' "$counter_fails" "$counter_actions"
+    printf 'suspended=%s\n' "$(is_suspended "$name" && echo yes || echo no)"
+    printf 'latched=%s\n' "$(is_latched "$name" && echo yes || echo no)"
+    if run_checks "$name" "$record_checks" "$record_networks" "$record_http" "$record_http_status"; then
+      printf 'verdict=ok\n'
+    else
+      printf 'verdict=fail\nreason=%s\nfault=%s\n' "$check_reason" "$check_fault"
+    fi
+  done < <(each_record)
+  (( found == 1 )) || { echo "Container is not configured: $name" >&2; return 1; }
+  return 0
+}
+
+usage() {
+  cat <<'EOF'
+Usage: container-watchdog COMMAND [CONTAINER]
+
+Read-only commands:
+  list                 Show every configured container and its settings
+  check                Run all checks and report, without repairing anything
+  status CONTAINER     Show settings, counters, and the current verdict
+
+Scheduled command:
+  run                  Run checks and repair where allowed (used by cron)
+
+Maintenance commands:
+  suspend CONTAINER    Keep watching but only notify, never repair
+  resume CONTAINER     Allow repairs again and clear the failure counters
+  reset CONTAINER      Clear counters without changing suspension
+
+The watchdog only ever starts, restarts, or reattaches an exact container that
+is listed in watch.conf. It never creates or removes containers, images,
+volumes, or networks and never executes anything inside a container. A container
+latched by Container Breakglass, or covered by an armed deployment guard, is
+reported but never touched.
+EOF
+}
+
+main() {
+  install -d -m 0700 "$RUNTIME_DIR" 2>/dev/null || true
+
+  case "${1:-}" in
+    run)
+      exec 8>"$RUN_LOCK_FILE"
+      "$FLOCK_TOOL" -n 8 || exit 0
+      process_all 0
+      ;;
+    check)
+      process_all 1
+      ;;
+    list)
+      local line
+      while IFS= read -r line; do
+        read_record "$line" || continue
+        printf '%s action=%s checks=%s networks=%s\n' \
+          "$record_container" "$record_action" "$record_checks" "${record_networks:--}"
+      done < <(each_record)
+      ;;
+    status)
+      [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+      show_container "$2"
+      ;;
+    suspend)
+      [[ $# -eq 2 ]] && valid_name "$2" || { usage >&2; exit 2; }
+      suspend_container "$2" "suspended by operator"
+      report suspended "$2" manual
+      refresh_status
+      ;;
+    resume)
+      [[ $# -eq 2 ]] && valid_name "$2" || { usage >&2; exit 2; }
+      rm -f "$SUSPEND_DIR/$2"
+      rm -f "$COUNTER_DIR/$2"
+      report resumed "$2" ok
+      refresh_status
+      ;;
+    reset)
+      [[ $# -eq 2 ]] && valid_name "$2" || { usage >&2; exit 2; }
+      rm -f "$COUNTER_DIR/$2"
+      log "action=reset container=$2 result=ok"
+      ;;
+    ''|-h|--help|help)
+      usage
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
