@@ -5,6 +5,22 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29n]
+
+### Added
+
+- A `peer` check, for a process that keeps running long after the connection it
+  exists to maintain has died. A tunnel client stays running, healthy and
+  attached in that state, so none of the other checks notice, and the loss is
+  only visible in the socket table. Set `peer=ADDRESS:PORT`; the fault is
+  classed as disconnected and repaired by restarting, which is the narrowest
+  thing that can rebuild the session.
+- `peer` takes a numeric address on purpose. A hostname would parse and then
+  never match a single connection, which would look like a permanent fault and
+  drive a repair loop, so it is refused by the command line and the web page
+  alike. A record asking for the check without naming a peer is refused for the
+  same reason.
+
 ## [2026.07.29m]
 
 ### Fixed

@@ -122,6 +122,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
       <label><input type="checkbox" name="check[]" value="network" checked> network</label>
       <label><input type="checkbox" name="check[]" value="ports" checked> ports</label>
       <label><input type="checkbox" name="check[]" value="http"> http probe</label>
+      <label><input type="checkbox" name="check[]" value="peer"> peer connection</label>
     </dd>
 
     <dt>Networks</dt>
@@ -134,6 +135,14 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     <dd>
       <input type="text" name="http" placeholder="http://127.0.0.1:3000/">
       <span class="watchdog-subtle">Only used when the http check is enabled.</span>
+    </dd>
+
+    <dt>Peer</dt>
+    <dd>
+      <input type="text" name="peer" placeholder="203.0.113.7:443">
+      <span class="watchdog-subtle">The connection that must stay established, as a
+        numeric address and port. Catches a process still running long after the
+        session it maintains died. Only used when the peer check is enabled.</span>
     </dd>
 
     <dt>Restraint</dt>
@@ -205,7 +214,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     ).join('');
     // Every other setting travels with the change so switching a level cannot
     // silently reset a probe, a threshold, or a repair budget.
-    const carry = ['checks', 'networks', 'threshold', 'cooldown', 'max_actions', 'window', 'http']
+    const carry = ['checks', 'networks', 'threshold', 'cooldown', 'max_actions', 'window', 'http', 'peer']
       .map(key => `data-${key}="${escape(record[key])}"`).join(' ');
     return `<select class="watchdog-level" data-container="${escape(record.container)}" ${carry}>${options}</select>`;
   }
@@ -292,6 +301,8 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
     });
     const probe = select.dataset.http;
     if (probe && probe !== '-') payload.http = probe;
+    const peer = select.dataset.peer;
+    if (peer && peer !== '-') payload.peer = peer;
 
     let networks = select.dataset.networks;
     if (networks === '-') networks = '';
@@ -357,7 +368,8 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
       action: form.action_level.value,
       checks: checks.join(','),
       networks: form.networks.value.trim(),
-      http: form.http.value.trim()
+      http: form.http.value.trim(),
+      peer: form.peer.value.trim()
     };
     ['threshold', 'cooldown', 'max_actions', 'window'].forEach(name => {
       const value = form[name].value.trim();

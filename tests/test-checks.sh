@@ -35,6 +35,14 @@ printf 'running|unhealthy|bridge~192.0.2.4 | | |bridge\n' > "$WORK/fixtures/sick
 printf 'exited|none|| | |bridge\n' > "$WORK/fixtures/stopped"
 printf 'running|healthy|other~192.0.2.20 | | |other\n' > "$WORK/fixtures/wrong-network"
 printf 'running|none|| | |host\n' > "$WORK/fixtures/host-mode"
+# A tunnel client: running and attached, so only the socket table can tell
+# whether the session it exists to maintain is still there.
+printf 'running|none|| | |host\n' > "$WORK/fixtures/peer-live"
+printf 'running|none|| | |host\n' > "$WORK/fixtures/peer-gone"
+printf 'running|none|| | |host\n' > "$WORK/fixtures/peer-prefix"
+# A bridge container keeps its sockets in its own namespace, so the host socket
+# table can never show them and the check could never pass.
+printf 'running|healthy|bridge~192.0.2.4 | | |bridge\n' > "$WORK/fixtures/peer-bridged"
 
 cat > "$WORK/bin/docker" <<EOF
 #!/bin/bash
@@ -63,7 +71,14 @@ chmod 0700 "$WORK/bin/docker"
 
 cat > "$WORK/bin/ss" <<'EOF'
 #!/bin/bash
-# Only port 8091 is listening on this fake host.
+# Two views of the same fake host: what is listening, and what is connected.
+# Filtering on the state drops the State column, which is why the connected
+# view has one field fewer.
+if [[ "$*" == *established* ]]; then
+  echo "Recv-Q Send-Q Local Address:Port  Peer Address:Port"
+  echo "0      0      192.0.2.10:38126  203.0.113.9:443"
+  exit 0
+fi
 echo "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port"
 echo "LISTEN 0      4096   127.0.0.1:8091   0.0.0.0:*"
 EOF
@@ -97,6 +112,10 @@ container=host-mode
 container=remapped
 container=udp-only
 container=absent
+container=peer-live checks=running,peer peer=203.0.113.9:443
+container=peer-gone checks=running,peer peer=203.0.113.9:8443
+container=peer-prefix checks=running,peer peer=203.0.113.9:44
+container=peer-bridged checks=running,peer peer=203.0.113.9:443
 CONFIG
 
 verdict_for() {
@@ -136,6 +155,17 @@ assert_verdict sick health-unhealthy unhealthy
 assert_verdict stopped state-exited stopped
 assert_verdict wrong-network missing-network-known-network detached
 assert_verdict absent not-found missing
+
+# A process can outlive the connection it exists to maintain. Nothing in the
+# container state shows that, which is the whole point of this check.
+assert_verdict peer-live "" ""
+assert_verdict peer-gone peer-lost disconnected
+# The endpoint has to match in full: 203.0.113.9:44 is not 203.0.113.9:443, and
+# a substring match would call a dead tunnel healthy.
+assert_verdict peer-prefix peer-lost disconnected
+# Asking for the check where it can never pass is a mistake in the record, not a
+# fault in the container, and it must not be answered with a restart.
+assert_verdict peer-bridged peer-needs-host-network misconfigured
 
 # Inspection alone must never mutate anything.
 [[ ! -s "$WORK/actions.log" ]] || { echo "Checks caused container actions" >&2; exit 1; }

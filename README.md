@@ -56,9 +56,21 @@ configuration is reused on start.
 | `network` | No network attached, an attached network without an address, or a declared network that is missing |
 | `ports`   | Port bindings configured but never published, or a published port with nothing listening on the host |
 | `http`    | Optional local probe returning an unexpected status |
+| `peer`    | A connection the container exists to maintain is gone. Set `peer=ADDRESS:PORT` |
 
 `starting` is treated as acceptable, so a slow boot is never mistaken for a
 fault.
+
+The `peer` check covers a gap the others cannot: a tunnel or bridge client whose
+process is running, whose container is healthy, and whose network is attached,
+but whose session to its far end has silently died. Nothing in the container
+state reveals that, so the socket table is consulted instead.
+
+`peer` takes a numeric `ADDRESS:PORT`, because that is what the socket table
+reports; a hostname is refused rather than accepted and never matched. It
+matches the endpoint rather than the process, so it can miss a fault but never
+invent one. The container must share the host network namespace for its
+connections to be visible.
 
 ## Repairs
 
@@ -69,6 +81,7 @@ by the `action` level the operator granted:
 |-------|--------|----------|
 | Stopped | `docker start` | `action=restart` or higher |
 | Unhealthy, port not listening, failing probe | `docker restart` | `action=restart` or higher |
+| Lost peer connection | `docker restart` | `action=restart` or higher |
 | Detached from its network | stop, `docker network connect`, start | `action=reattach` |
 | Container not found | none, report only | — |
 
@@ -143,6 +156,7 @@ container=redman action=reattach networks=redman-docker-api
 container=nextcloud-aio-mastercontainer action=restart
 container=nextcloud-aio-nextcloud action=notify
 container=homepage action=restart http=http://127.0.0.1:3000/ checks=running,health,network,ports,http
+container=newt action=restart peer=203.0.113.7:443 checks=running,peer
 ```
 
 ## Homepage status
@@ -210,7 +224,7 @@ Then add a service widget to `services.yaml`:
 ## Build
 
 ```bash
-./build-plugin.sh 2026.07.29m
+./build-plugin.sh 2026.07.29n
 ```
 
 Produces a self-contained `dist/container-watchdog.plg` with every payload

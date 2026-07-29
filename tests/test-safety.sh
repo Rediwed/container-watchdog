@@ -32,6 +32,10 @@ printf 'running|healthy|| | |redman-docker-api\n' > "$WORK/fixtures/detached"
 printf 'running|healthy|| | |ghost-network\n' > "$WORK/fixtures/orphan"
 printf 'running|unhealthy|bridge~192.0.2.4 | | |bridge\n' > "$WORK/fixtures/sick"
 printf 'exited|none|| | |bridge\n' > "$WORK/fixtures/stopped"
+# Running, healthy and sharing the host network namespace: only the session it
+# maintains is gone. The ss stub below reports no established connections.
+printf 'running|healthy|| | |host\n' > "$WORK/fixtures/tunnel"
+printf 'running|healthy|| | |host\n' > "$WORK/fixtures/tunnel-watched"
 
 cat > "$WORK/bin/docker" <<EOF
 #!/bin/bash
@@ -117,6 +121,8 @@ container=detached action=reattach networks=redman-docker-api threshold=3 cooldo
 container=orphan action=reattach networks=ghost-network threshold=1 cooldown=60 max_actions=2 window=3600
 container=sick action=restart threshold=1 cooldown=60 max_actions=2 window=3600
 container=stopped action=restart threshold=1 cooldown=60 max_actions=2 window=3600
+container=tunnel action=restart checks=running,peer peer=203.0.113.9:443 threshold=1 cooldown=60 max_actions=2 window=3600
+container=tunnel-watched action=notify checks=running,peer peer=203.0.113.9:443 threshold=1 cooldown=60 max_actions=2 window=3600
 CONFIG
 
 age_last_action() {
@@ -143,6 +149,12 @@ assert() {
 refute '^stop detached' "$ACTIONS" "acted on first failure, below threshold"
 assert '^restart sick' "$ACTIONS" "threshold=1 should have acted on sick"
 assert '^start stopped' "$ACTIONS" "a stopped container should be started, not restarted"
+# A process that outlived its connection is repaired by restarting it, and only
+# restarting it: it is running and attached, so there is nothing narrower.
+assert '^restart tunnel$' "$ACTIONS" "a lost peer connection did not trigger a restart"
+refute '^stop tunnel' "$ACTIONS" "a lost peer connection stopped the container"
+# The same fault under notify must stay untouched, like every other fault.
+refute 'tunnel-watched' "$ACTIONS" "a notify-only container was repaired"
 
 # ── The narrowest repair is chosen per fault ──
 : > "$ACTIONS"

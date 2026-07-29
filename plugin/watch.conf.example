@@ -5,8 +5,8 @@
 # Nothing is watched until you add records here.
 #
 #   container=NAME       Exact container name. Required.
-#   checks=LIST          Comma separated: running, health, network, ports, http.
-#                        Default: running,health,network,ports
+#   checks=LIST          Comma separated: running, health, network, ports, http,
+#                        peer. Default: running,health,network,ports
 #   action=LEVEL         notify   report only, never touch the container
 #                        restart  may start a stopped container and restart a
 #                                 broken one
@@ -22,12 +22,23 @@
 #   window=SECONDS       Length of that rolling window. Default 3600.
 #   http=URL             Optional probe. Only used when checks includes http.
 #   http_status=CODE     Expected status for that probe. Default 200.
+#   peer=ADDRESS:PORT    The connection that must stay established. Required when
+#                        checks includes peer. Must be a numeric address, such as
+#                        203.0.113.7:443, because that is what the socket table
+#                        reports; a hostname is refused rather than silently
+#                        never matching. The container has to share the host
+#                        network namespace for its connections to be visible.
 #
 # The checks are deliberately cheap and read-only. The network and ports checks
 # exist because a container can report healthy while having no interface beyond
 # loopback: its health probe passes over localhost while every outbound call
 # fails and no published port is reachable. A plain restart does not repair that
 # state, which is why reattach exists.
+#
+# The peer check covers the opposite blind spot. A tunnel or bridge client can
+# keep running, stay healthy and stay attached long after the session it exists
+# to maintain has died. Nothing in the container state shows that, so the socket
+# table is consulted instead, and restarting is what rebuilds the session.
 #
 # A container latched by Container Breakglass, or covered by an armed deployment
 # guard, is reported but never touched regardless of the action set here.

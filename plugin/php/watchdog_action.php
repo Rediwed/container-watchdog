@@ -80,7 +80,7 @@ function validChecks(string $value): bool
     if ($value === '') {
         return false;
     }
-    $allowed = ['running', 'health', 'network', 'ports', 'http'];
+    $allowed = ['running', 'health', 'network', 'ports', 'http', 'peer'];
     foreach (explode(',', $value) as $check) {
         if (!in_array($check, $allowed, true)) {
             return false;
@@ -102,6 +102,30 @@ function validNetworks(string $value): bool
 function validUrl(string $value): bool
 {
     return (bool) preg_match('#^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?=&%-]*)?$#D', $value);
+}
+
+/**
+ * ADDRESS:PORT with a literal address. The socket table reports numeric
+ * addresses in plain decimal, so anything it would never print verbatim can
+ * never match: a hostname or a zero-padded number would look like a permanent
+ * fault and drive repairs against a healthy container. The command line applies
+ * the same rule; this only keeps the mistake from reaching it.
+ */
+function validPeer(string $value): bool
+{
+    $position = strrpos($value, ':');
+    if ($position === false) {
+        return false;
+    }
+    $host = substr($value, 0, $position);
+    $port = substr($value, $position + 1);
+    if (!preg_match('/^[1-9][0-9]{0,4}$/D', $port) || (int) $port > 65535) {
+        return false;
+    }
+    if (preg_match('/^\[[0-9A-Fa-f:]{2,45}\]$/D', $host)) {
+        return true;
+    }
+    return (bool) filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 }
 
 /**
@@ -182,6 +206,13 @@ switch ($operation) {
         if ($probe !== '' && !validUrl($probe)) {
             refuse(400, 'Invalid probe URL.');
         }
+        $peer = trim((string) ($_POST['peer'] ?? ''));
+        if ($peer !== '' && !validPeer($peer)) {
+            refuse(400, 'The peer must be a numeric address and port, for example 203.0.113.7:443.');
+        }
+        if (in_array('peer', explode(',', $checks), true) && $peer === '') {
+            refuse(400, 'The peer check needs an address and port to look for.');
+        }
 
         $arguments = ['add', 'container=' . $container, 'action=' . $action, 'checks=' . $checks];
         if ($networks !== '') {
@@ -189,6 +220,9 @@ switch ($operation) {
         }
         if ($probe !== '') {
             $arguments[] = 'http=' . $probe;
+        }
+        if ($peer !== '') {
+            $arguments[] = 'peer=' . $peer;
         }
         foreach (['threshold', 'cooldown', 'max_actions', 'window'] as $numeric) {
             $value = trim((string) ($_POST[$numeric] ?? ''));

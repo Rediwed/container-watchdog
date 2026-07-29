@@ -59,7 +59,7 @@ refute 'watch\.conf' "$ACTION" "the interface must not address the configuration
 
 # ── It cannot express more than the command line allows ──
 assert "'notify', 'restart', 'reattach'" "$ACTION" "the action level must be an allowlist"
-assert "\['running', 'health', 'network', 'ports', 'http'\]" "$ACTION" \
+assert "\['running', 'health', 'network', 'ports', 'http', 'peer'\]" "$ACTION" \
   "the check list must be an allowlist"
 assert '\^\[A-Za-z0-9\]\[A-Za-z0-9_\.\\?-\]\{0,127\}\$' "$ACTION" \
   "container names must match the command line pattern"
@@ -74,7 +74,7 @@ assert 'docker ps -a --format' "$ACTION" "the container list should come from a 
 assert 'select class="watchdog-level"' "$MAIN" "the action level must be editable in the table"
 # The carry list is asserted literally: dropping a name here would silently reset
 # that setting whenever an operator changes a level.
-assert "\\['checks', 'networks', 'threshold', 'cooldown', 'max_actions', 'window', 'http'\\]" \
+assert "\\['checks', 'networks', 'threshold', 'cooldown', 'max_actions', 'window', 'http', 'peer'\\]" \
   "$MAIN" "changing a level must preserve every other setting"
 assert 'reattach needs at least one network' "$MAIN" \
   "switching to reattach without networks must ask rather than fail"

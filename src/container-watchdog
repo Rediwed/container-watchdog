@@ -132,6 +132,28 @@ valid_url() {
   [[ "${1:-}" =~ ^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?=&%-]*)?$ ]]
 }
 
+valid_peer() {
+  # ADDRESS:PORT, and the address has to be a literal. ss reports numeric
+  # addresses in plain decimal, so anything it would never print verbatim can
+  # never match a live connection: it would look like a permanent fault and
+  # drive repairs against a container that is perfectly healthy. Hostnames and
+  # zero-padded numbers are both refused here for that one reason.
+  local value=${1:-} host port octet
+  [[ "$value" == *:* ]] || return 1
+  host=${value%:*}
+  port=${value##*:}
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] || return 1
+  (( port <= 65535 )) || return 1
+  # IPv6 literals appear bracketed in ss output and must be written that way.
+  [[ "$host" =~ ^\[[0-9A-Fa-f:]{2,45}\]$ ]] && return 0
+  [[ "$host" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  for octet in ${host//./ }; do
+    [[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+    (( octet <= 255 )) || return 1
+  done
+  return 0
+}
+
 # ── Configuration ──
 
 # Populated by read_record for the container currently being processed.
@@ -145,6 +167,7 @@ record_max_actions=""
 record_window=""
 record_http=""
 record_http_status=""
+record_peer=""
 
 reset_record() {
   record_container=""
@@ -157,6 +180,7 @@ reset_record() {
   record_window=$DEFAULT_WINDOW
   record_http=""
   record_http_status=$DEFAULT_HTTP_STATUS
+  record_peer=""
 }
 
 # Parses one configuration line into the record_* variables.
@@ -178,7 +202,7 @@ read_record() {
         local item
         for item in ${value//,/ }; do
           case "$item" in
-            running|health|network|ports|http) ;;
+            running|health|network|ports|http|peer) ;;
             *) return 1 ;;
           esac
         done
@@ -220,12 +244,21 @@ read_record() {
         valid_number "$value" && (( value >= 100 && value <= 599 )) || return 1
         record_http_status=$value
         ;;
+      peer)
+        valid_peer "$value" || return 1
+        record_peer=$value
+        ;;
       *) return 1 ;;
     esac
   done
   [[ -n "$record_container" ]] || return 1
   # Reattach needs to know which networks are expected; without that it cannot act.
   if [[ "$record_action" == reattach && -z "$record_networks" ]]; then
+    return 1
+  fi
+  # A peer check with nothing to look for would either do nothing or, worse,
+  # report a fault on every cycle. Refuse the record instead.
+  if [[ ",$record_checks," == *,peer,* && -z "$record_peer" ]]; then
     return 1
   fi
   return 0
@@ -398,6 +431,19 @@ host_listening() {
   "$SS_TOOL" -lnt 2>/dev/null | awk -v port=":$port" 'NR > 1 { if (index($4, port) && substr($4, length($4) - length(port) + 1) == port) found = 1 } END { exit !found }'
 }
 
+peer_established() {
+  # peer_established ADDRESS:PORT — true when an established outbound connection
+  # to that exact endpoint exists. Filtering on the state drops the State column,
+  # leaving the peer in field four, after a single header line.
+  #
+  # This matches the endpoint, not the process, so any process talking to that
+  # endpoint satisfies it. For a tunnel client with its own control server that
+  # is effectively unique, and the failure direction is the safe one: it can
+  # miss a fault, never invent one.
+  local endpoint=$1
+  "$SS_TOOL" -tn state established 2>/dev/null | awk -v peer="$endpoint" 'NR > 1 && $4 == peer { found = 1 } END { exit !found }'
+}
+
 # ── Checks ──
 
 # Sets check_reason to a short machine-readable cause, and check_fault to the
@@ -406,7 +452,7 @@ check_reason=""
 check_fault=""
 
 run_checks() {
-  local name=$1 checks=$2 networks=$3 http=$4 http_status=$5
+  local name=$1 checks=$2 networks=$3 http=$4 http_status=$5 peer=${6:-}
   check_reason=""
   check_fault=""
 
@@ -497,6 +543,26 @@ run_checks() {
           return 1
         fi
         ;;
+      peer)
+        # A process can stay up long after the connection it exists to maintain
+        # has gone. Nothing in the container state shows that, so look at the
+        # socket itself.
+        [[ -n "$peer" ]] || continue
+        # Only a container sharing the host network namespace has its sockets in
+        # the host socket table. Anywhere else this check could never pass, so
+        # name the misconfiguration rather than report a fault every cycle and
+        # restart a container that is doing nothing wrong.
+        if [[ "$inspect_network_mode" != host ]]; then
+          check_reason="peer-needs-host-network"
+          check_fault=misconfigured
+          return 1
+        fi
+        if ! peer_established "$peer"; then
+          check_reason="peer-lost"
+          check_fault=disconnected
+          return 1
+        fi
+        ;;
     esac
   done
   return 0
@@ -510,6 +576,11 @@ select_remedy() {
   local fault=$1 action=$2
   case "$fault" in
     missing) printf 'none\n' ;;
+    misconfigured)
+      # The operator asked for a check that cannot work here. Restarting would
+      # not change that, so this is reported and never repaired.
+      printf 'none\n'
+      ;;
     stopped)
       [[ "$action" == notify ]] && printf 'none\n' || printf 'start\n'
       ;;
@@ -517,6 +588,11 @@ select_remedy() {
       [[ "$action" == reattach ]] && printf 'reattach\n' || printf 'none\n'
       ;;
     unhealthy)
+      [[ "$action" == notify ]] && printf 'none\n' || printf 'restart\n'
+      ;;
+    disconnected)
+      # The container is running and attached; only the session it maintains is
+      # gone. Restarting is the narrowest thing that can rebuild it.
       [[ "$action" == notify ]] && printf 'none\n' || printf 'restart\n'
       ;;
     *) printf 'none\n' ;;
@@ -567,13 +643,13 @@ apply_remedy() {
 
 evaluate() {
   local name=$1 checks=$2 action=$3 networks=$4 threshold=$5 cooldown=$6
-  local max_actions=$7 window=$8 http=$9 http_status=${10} dry_run=${11:-0}
+  local max_actions=$7 window=$8 http=$9 http_status=${10} peer=${11:-} dry_run=${12:-0}
   local now healthy=0
 
   now=$(date +%s)
   load_counters "$name"
 
-  if run_checks "$name" "$checks" "$networks" "$http" "$http_status"; then
+  if run_checks "$name" "$checks" "$networks" "$http" "$http_status" "$peer"; then
     healthy=1
   fi
 
@@ -672,7 +748,7 @@ process_all() {
     read_record "$line" || continue
     evaluate "$record_container" "$record_checks" "$record_action" "$record_networks" \
       "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window" \
-      "$record_http" "$record_http_status" "$dry_run"
+      "$record_http" "$record_http_status" "$record_peer" "$dry_run"
   done < <(each_record)
   (( dry_run == 0 )) && refresh_status
   return 0
@@ -691,9 +767,10 @@ show_container() {
     printf 'threshold=%s\ncooldown=%s\nmax_actions=%s\nwindow=%s\n' \
       "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window"
     printf 'consecutive_failures=%s\nrepairs_in_window=%s\n' "$counter_fails" "$counter_actions"
+    printf 'peer=%s\n' "${record_peer:--}"
     printf 'suspended=%s\n' "$(is_suspended "$name" && echo yes || echo no)"
     printf 'latched=%s\n' "$(is_latched "$name" && echo yes || echo no)"
-    if run_checks "$name" "$record_checks" "$record_networks" "$record_http" "$record_http_status"; then
+    if run_checks "$name" "$record_checks" "$record_networks" "$record_http" "$record_http_status" "$record_peer"; then
       printf 'verdict=ok\n'
     else
       printf 'verdict=fail\nreason=%s\nfault=%s\n' "$check_reason" "$check_fault"
@@ -763,10 +840,10 @@ report_all() {
   while IFS= read -r line; do
     read_record "$line" || continue
     load_counters "$record_container"
-    printf 'container=%s action=%s checks=%s networks=%s threshold=%s cooldown=%s max_actions=%s window=%s http=%s verdict=%s fails=%s repairs=%s suspended=%s latched=%s\n' \
+    printf 'container=%s action=%s checks=%s networks=%s threshold=%s cooldown=%s max_actions=%s window=%s http=%s peer=%s verdict=%s fails=%s repairs=%s suspended=%s latched=%s\n' \
       "$record_container" "$record_action" "$record_checks" "${record_networks:--}" \
       "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window" \
-      "${record_http:--}" \
+      "${record_http:--}" "${record_peer:--}" \
       "${counter_last_verdict:-unknown}" "$counter_fails" "$counter_actions" \
       "$(is_suspended "$record_container" && echo yes || echo no)" \
       "$(is_latched "$record_container" && echo yes || echo no)"
@@ -791,6 +868,18 @@ Configuration commands:
                        Add or replace a record, using the same syntax as
                        watch.conf. Rejected unless every field validates.
   remove CONTAINER     Stop watching a container and forget its counters
+
+Checks, set with checks=a,b,c:
+  running              The container is in the running state
+  health               Its Docker health check is not failing
+  network              It has an address, and every network in networks= is attached
+  ports                Every published port is actually listening on the host
+  http                 http= returns http_status= (default 200)
+  peer                 An established connection to peer= exists. Use a numeric
+                       ADDRESS:PORT, for example 203.0.113.7:443, because that is
+                       what the socket table reports. This catches a process that
+                       is still running long after the session it maintains died,
+                       which no container state reveals.
 
 Maintenance commands:
   suspend CONTAINER    Keep watching but only notify, never repair
