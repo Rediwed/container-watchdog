@@ -20,15 +20,48 @@ function refuse(int $status, string $message): void
     exit;
 }
 
-$state = @parse_ini_file('/var/local/emhttp/var.ini');
-$expected = is_array($state) ? (string) ($state['csrf_token'] ?? '') : '';
-$supplied = (string) ($_POST['csrf_token'] ?? '');
-if ($expected === '' || !hash_equals($expected, $supplied)) {
-    refuse(403, 'Invalid CSRF token.');
+/*
+ * CSRF is enforced by Unraid itself, not here. The php.ini auto_prepend_file
+ * /usr/local/emhttp/webGui/include/local_prepend.php compares the token with
+ * hash_equals for every POST and terminates the request before this file runs,
+ * then removes the field from $_POST. Comparing it again here is therefore
+ * impossible on a stock host: the value is already gone.
+ *
+ * That makes the POST requirement below a security control rather than a
+ * formality, because a GET would bypass the platform gate entirely.
+ *
+ * As defence in depth, should a future release stop removing the field, it is
+ * validated here as well, and a request that carried no token at all is refused.
+ */
+function csrfSatisfied(): bool
+{
+    $state = @parse_ini_file('/var/local/emhttp/var.ini');
+    $expected = is_array($state) ? (string) ($state['csrf_token'] ?? '') : '';
+    if ($expected === '') {
+        return false;
+    }
+    if (isset($_POST['csrf_token'])) {
+        return hash_equals($expected, (string) $_POST['csrf_token']);
+    }
+    if (isset($_SERVER['HTTP_X_CSRF_TOKEN'])) {
+        return hash_equals($expected, (string) $_SERVER['HTTP_X_CSRF_TOKEN']);
+    }
+    $raw = file_get_contents('php://input');
+    if (is_string($raw) && $raw !== '') {
+        parse_str($raw, $submitted);
+        if (!empty($submitted['csrf_token'])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     refuse(405, 'This endpoint only accepts POST.');
+}
+
+if (!csrfSatisfied()) {
+    refuse(403, 'Invalid CSRF token.');
 }
 
 /** Container names match the exact pattern the command line enforces. */

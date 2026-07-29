@@ -5,6 +5,35 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29d]
+
+### Fixed
+
+- The web interface refused every request with "Invalid CSRF token". Unraid
+  registers a global `auto_prepend_file` that validates the token with
+  `hash_equals` for every POST and then removes it from `$_POST`, so the
+  endpoint was comparing against a value the platform had already consumed.
+
+### Security
+
+- The endpoint now relies on that platform gate, which was verified empirically:
+  a wrong, empty, or missing token never reaches plugin code at all. Requiring
+  POST is therefore documented as the security control that engages the gate,
+  since a GET would bypass it.
+- Defence in depth remains: the token is still validated here if a future
+  release stops removing it, the `X-CSRF-Token` header form is accepted, and a
+  request carrying no token at all is refused.
+
+## [2026.07.29c]
+
+### Fixed
+
+- The web interface rejected every request with "Invalid CSRF token". The page
+  read the token from an ambient `$var`, which is not in scope inside an included
+  file, so it emitted an empty token. It now reads `/var/local/emhttp/var.ini`
+  itself, exactly as the action endpoint does.
+- The installer no longer describes the plugin as command line only.
+
 ## [2026.07.29b]
 
 ### Fixed

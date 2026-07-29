@@ -22,7 +22,7 @@ CSS_FILE="$SCRIPT_DIR/plugin/css/watchdog.css"
 README_FILE="$SCRIPT_DIR/README.md"
 DIST_DIR="$SCRIPT_DIR/dist"
 OUTPUT="$DIST_DIR/container-watchdog.plg"
-VERSION="${1:-2026.07.29b}"
+VERSION="${1:-2026.07.29d}"
 
 for file in "$HOST_SCRIPT" "$NOTIFY_SCRIPT" "$STATUS_SCRIPT" "$CRON_FILE" \
   "$EVENT_FILE" "$REMOVE_SCRIPT" "$EXAMPLE_FILE" "$PAGE_FILE" "$MAIN_PHP_FILE" \
@@ -94,6 +94,19 @@ cat > "$TEMPORARY" <<EOF
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.0.0" icon="dog" pluginURL="https://github.com/Rediwed/container-watchdog/releases/latest/download/container-watchdog.plg">
   <CHANGES>
 ###$VERSION
+- Fixed the web interface refusing every request with an invalid CSRF token.
+  Unraid validates the token in a global prepend and then removes it from the
+  request, so the endpoint could never match it again. The platform gate is now
+  relied on, with the token still checked defensively if it is ever left in
+  place, and the POST requirement documented as the control that engages it.
+
+###2026.07.29c
+- Fixed the web interface reporting an invalid CSRF token: the page relied on an
+  ambient variable that is not in scope inside an included file, so every
+  request was rejected. It now reads the token from the host state file itself.
+- The installer no longer describes the plugin as command line only.
+
+###2026.07.29b
 - Reattach now validates every network before stopping the container, and always
   starts it again, so an unknown or renamed network can no longer leave a
   container down until the next cycle.
@@ -220,8 +233,9 @@ nohup /bin/bash -c '
     sleep 1
   done
 ' >/dev/null 2>&1 &
-echo "Container Watchdog $VERSION installed (CLI only)."
-echo "Nothing is watched until you list containers in watch.conf."
+echo "Container Watchdog $VERSION installed."
+echo "Open Settings, Utilities, Container Watchdog to configure it."
+echo "Nothing is watched until you list containers there."
 ]]></INLINE>
   </FILE>
 

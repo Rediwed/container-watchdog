@@ -16,6 +16,11 @@ if (is_readable($statusFile)) {
     }
 }
 
+// Read the token from the host state file rather than relying on an ambient
+// $var, which is not in scope inside an included file.
+$watchdogState = @parse_ini_file('/var/local/emhttp/var.ini');
+$watchdogCsrf = is_array($watchdogState) ? (string) ($watchdogState['csrf_token'] ?? '') : '';
+
 function field(array $source, string $key, $fallback = '—')
 {
     $value = $source[$key] ?? '';
@@ -143,7 +148,7 @@ $breakglassPresent = is_executable('/usr/local/sbin/container-breakglass');
 <script>
 (function () {
   const endpoint = '/plugins/container-watchdog/php/watchdog_action.php';
-  const token = <?= json_encode((string) ($var['csrf_token'] ?? '')) ?>;
+  const token = <?= json_encode($watchdogCsrf) ?>;
   const rows = document.getElementById('watchdog-rows');
   const output = document.getElementById('watchdog-output');
 

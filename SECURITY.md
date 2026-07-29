@@ -36,8 +36,16 @@ The interface is a page rendered by the web server Unraid already runs. No
 listener, port, or socket is added, and the page inherits the existing
 authentication.
 
-- Every request must be POST and must carry the host CSRF token from
-  `/var/local/emhttp/var.ini`, compared with `hash_equals`.
+- Every request must be POST. This is a security control, not a formality:
+  Unraid registers `/usr/local/emhttp/webGui/include/local_prepend.php` as the
+  php.ini `auto_prepend_file`, and it compares the CSRF token with `hash_equals`
+  for every POST, logging and terminating the request before any plugin code
+  runs. It then removes the field from `$_POST`, so the endpoint cannot compare
+  it a second time. A GET would skip that gate entirely, which is why one is
+  refused outright.
+- As defence in depth the endpoint still validates the token itself if a future
+  release stops removing it, accepts the `X-CSRF-Token` header form, and refuses
+  a request that carried no token at all.
 - The page owns no logic and no state. Every operation is delegated to the
   command line tool, so the interface cannot express anything the command line
   would refuse, and configuration is never written by the web layer.

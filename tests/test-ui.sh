@@ -28,7 +28,15 @@ assert '^Menu="Utilities"' "$PAGE" "the page must appear under Utilities"
 assert 'hash_equals' "$ACTION" "CSRF comparison must be constant time"
 assert "parse_ini_file\('/var/local/emhttp/var.ini'\)" "$ACTION" \
   "the CSRF token must come from the host state file"
+# Unraid's auto_prepend_file validates and then strips the token, so requiring
+# POST is what puts the request through that gate at all.
 assert "REQUEST_METHOD.*!== 'POST'" "$ACTION" "mutations must require POST"
+assert 'csrfSatisfied' "$ACTION" "the token must still be checked defensively"
+assert 'HTTP_X_CSRF_TOKEN' "$ACTION" "the header form of the token must be handled"
+# The page is an included file, so an ambient \$var is not in scope there.
+assert "parse_ini_file\('/var/local/emhttp/var.ini'\)" "$MAIN" \
+  "the page must read the CSRF token itself"
+refute '\$var\[' "$MAIN" "the page must not rely on an ambient \$var"
 
 # ── Nothing reaches a shell unescaped ──
 assert 'escapeshellarg' "$ACTION" "arguments must be escaped"
