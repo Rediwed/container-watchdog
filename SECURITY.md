@@ -30,6 +30,27 @@ an operator has already listed, and only in ways that cannot destroy state.
   deliberately require a human.
 - Open a network listener of any kind.
 
+## Web interface
+
+The interface is a page rendered by the web server Unraid already runs. No
+listener, port, or socket is added, and the page inherits the existing
+authentication.
+
+- Every request must be POST and must carry the host CSRF token from
+  `/var/local/emhttp/var.ini`, compared with `hash_equals`.
+- The page owns no logic and no state. Every operation is delegated to the
+  command line tool, so the interface cannot express anything the command line
+  would refuse, and configuration is never written by the web layer.
+- Every value is validated against an explicit allowlist *before* it is escaped
+  into a command, so a rejected value never reaches a shell at all. Arguments are
+  escaped individually; no command string is assembled by concatenation.
+- The only Docker call the interface makes is a read-only container listing used
+  to populate the name picker.
+- Values are escaped on output, both server-side and in the browser.
+
+These properties are asserted statically by `tests/test-ui.sh`, so they cannot be
+weakened without a failing test.
+
 ## Configuration integrity
 
 - The allowlist and the credential files are refused when they are symlinks, so

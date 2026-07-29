@@ -1,0 +1,7 @@
+Menu="Utilities"
+Title="Container Watchdog"
+Icon="dog"
+Author="Rediwed"
+Type="php"
+---
+<?php include '/usr/local/emhttp/plugins/container-watchdog/php/watchdog_main.php'; ?>

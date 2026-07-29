@@ -35,12 +35,15 @@ Installation creates, without watching anything yet:
 /usr/local/sbin/container-watchdog
 /usr/local/sbin/container-watchdog-notify
 /usr/local/sbin/container-watchdog-status
+/usr/local/emhttp/plugins/container-watchdog/      # the Utilities page
 /boot/config/plugins/container-watchdog/watch.conf      # empty allowlist
 /boot/config/plugins/container-watchdog/ntfy.conf       # empty, falls back to Breakglass
 /boot/config/plugins/container-watchdog/container-watchdog.cron
 ```
 
 **Nothing is watched until you add records.** That is deliberate.
+
+The interface appears under **Settings → Utilities → Container Watchdog**.
 
 ## 3. Configure notifications
 
@@ -69,11 +72,12 @@ Anything else silently disables notifications rather than leaking a request.
 Start conservatively. Put everything on `notify` first, watch for a week, and
 only then grant repair rights where the behaviour was correct.
 
+Use **Settings → Utilities → Container Watchdog** and add containers from the
+picker, or do it from the command line:
+
 ```bash
-cat >> /boot/config/plugins/container-watchdog/watch.conf <<'EOF'
-container=redman action=notify
-container=nextcloud-aio-mastercontainer action=notify
-EOF
+container-watchdog add container=redman action=notify
+container-watchdog add container=nextcloud-aio-mastercontainer action=notify
 ```
 
 Check what it sees, without changing anything:

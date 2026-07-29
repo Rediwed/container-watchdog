@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXPECTED_VERSION="2026.07.29"
+EXPECTED_VERSION="2026.07.29a"
 
 for script in \
   "$ROOT/build-plugin.sh" \
@@ -19,6 +19,7 @@ bash "$ROOT/tests/test-config.sh"
 bash "$ROOT/tests/test-checks.sh"
 bash "$ROOT/tests/test-safety.sh"
 bash "$ROOT/tests/test-status.sh"
+bash "$ROOT/tests/test-ui.sh"
 
 "$ROOT/build-plugin.sh" "$EXPECTED_VERSION" >/dev/null
 xmllint --noout "$ROOT/dist/container-watchdog.plg"
@@ -33,7 +34,7 @@ manifest, expected_version = sys.argv[1:]
 root = ET.parse(manifest).getroot()
 assert root.get('version') == expected_version
 files = [node for node in root.findall('FILE') if node.find('SHA256') is not None]
-assert len(files) == 7, len(files)
+assert len(files) == 11, len(files)
 for node in files:
     assert node.get('Type') == 'base64', node.get('Name')
     payload = base64.b64decode((node.findtext('INLINE') or '').strip(), validate=True)
@@ -77,13 +78,19 @@ export PATH=$original_path
 rm -rf "$uninstall_root"
 trap - EXIT
 
+# The manifest heredoc is unquoted so it can expand payload variables, which
+# means a stray backtick would be executed instead of written.
+if grep -q '`' "$ROOT/build-plugin.sh"; then
+  echo "build-plugin.sh contains a backtick, which the unquoted heredoc would execute" >&2
+  exit 1
+fi
+
 # The plugin must never gain the capabilities it promises not to have.
 forbidden='docker[[:space:]]+(rm|rmi|exec|volume|image|build|run)\b|network[[:space:]]+(create|rm|disconnect)\b'
 if grep -REq "$forbidden" "$ROOT/src" "$ROOT/plugin"; then
   echo "Forbidden Docker capability found in plugin sources" >&2
   exit 1
 fi
-
 secret_pattern='(tk_[A-Za-z0-9]{12,}|AKIA[A-Z0-9]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|password[=:][^[:space:]]+|secret[=:][^[:space:]]+|api[_-]?key[=:][^[:space:]]+|/Users/|/home/[A-Za-z0-9._-]+/|10\.[0-9]{1,3}\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
 secret_found=false
 grep -RqIE --exclude-dir=.git --exclude-dir=dist --exclude=validate.sh "$secret_pattern" "$ROOT" && secret_found=true

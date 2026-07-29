@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# The manifest heredoc below is intentionally unquoted so it can expand the
+# payload variables. That also means a backtick anywhere in this file would be
+# executed as a command instead of written to the manifest, so this script must
+# stay free of them; tests/validate.sh enforces that.
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -10,13 +15,18 @@ CRON_FILE="$SCRIPT_DIR/plugin/container-watchdog.cron"
 EVENT_FILE="$SCRIPT_DIR/plugin/event-started.sh"
 REMOVE_SCRIPT="$SCRIPT_DIR/plugin/remove.sh"
 EXAMPLE_FILE="$SCRIPT_DIR/plugin/watch.conf.example"
+PAGE_FILE="$SCRIPT_DIR/plugin/container-watchdog.page"
+MAIN_PHP_FILE="$SCRIPT_DIR/plugin/php/watchdog_main.php"
+ACTION_PHP_FILE="$SCRIPT_DIR/plugin/php/watchdog_action.php"
+CSS_FILE="$SCRIPT_DIR/plugin/css/watchdog.css"
 README_FILE="$SCRIPT_DIR/README.md"
 DIST_DIR="$SCRIPT_DIR/dist"
 OUTPUT="$DIST_DIR/container-watchdog.plg"
-VERSION="${1:-2026.07.29}"
+VERSION="${1:-2026.07.29a}"
 
 for file in "$HOST_SCRIPT" "$NOTIFY_SCRIPT" "$STATUS_SCRIPT" "$CRON_FILE" \
-  "$EVENT_FILE" "$REMOVE_SCRIPT" "$EXAMPLE_FILE" "$README_FILE"; do
+  "$EVENT_FILE" "$REMOVE_SCRIPT" "$EXAMPLE_FILE" "$PAGE_FILE" "$MAIN_PHP_FILE" \
+  "$ACTION_PHP_FILE" "$CSS_FILE" "$README_FILE"; do
   [[ -f "$file" ]] || { echo "Missing plugin source: $file" >&2; exit 1; }
 done
 [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}[a-z]?$ ]] \
@@ -27,6 +37,12 @@ bash -n "$NOTIFY_SCRIPT"
 bash -n "$STATUS_SCRIPT"
 bash -n "$EVENT_FILE"
 bash -n "$REMOVE_SCRIPT"
+
+# The interface is privileged PHP; a syntax error would break the whole page.
+if command -v php >/dev/null 2>&1; then
+  php -l "$MAIN_PHP_FILE" >/dev/null
+  php -l "$ACTION_PHP_FILE" >/dev/null
+fi
 
 encode_file() {
   base64 < "$1" | tr -d '\n'
@@ -46,6 +62,10 @@ STATUS_BASE64=$(encode_file "$STATUS_SCRIPT")
 CRON_BASE64=$(encode_file "$CRON_FILE")
 EVENT_BASE64=$(encode_file "$EVENT_FILE")
 EXAMPLE_BASE64=$(encode_file "$EXAMPLE_FILE")
+PAGE_BASE64=$(encode_file "$PAGE_FILE")
+MAIN_PHP_BASE64=$(encode_file "$MAIN_PHP_FILE")
+ACTION_PHP_BASE64=$(encode_file "$ACTION_PHP_FILE")
+CSS_BASE64=$(encode_file "$CSS_FILE")
 README_BASE64=$(encode_file "$README_FILE")
 HOST_SHA256=$(sha256_file "$HOST_SCRIPT")
 NOTIFY_SHA256=$(sha256_file "$NOTIFY_SCRIPT")
@@ -53,6 +73,10 @@ STATUS_SHA256=$(sha256_file "$STATUS_SCRIPT")
 CRON_SHA256=$(sha256_file "$CRON_FILE")
 EVENT_SHA256=$(sha256_file "$EVENT_FILE")
 EXAMPLE_SHA256=$(sha256_file "$EXAMPLE_FILE")
+PAGE_SHA256=$(sha256_file "$PAGE_FILE")
+MAIN_PHP_SHA256=$(sha256_file "$MAIN_PHP_FILE")
+ACTION_PHP_SHA256=$(sha256_file "$ACTION_PHP_FILE")
+CSS_SHA256=$(sha256_file "$CSS_FILE")
 README_SHA256=$(sha256_file "$README_FILE")
 REMOVE_CONTENT=$(cat "$REMOVE_SCRIPT")
 
@@ -70,6 +94,18 @@ cat > "$TEMPORARY" <<EOF
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.0.0" icon="dog" pluginURL="https://github.com/Rediwed/container-watchdog/releases/latest/download/container-watchdog.plg">
   <CHANGES>
 ###$VERSION
+- Added a web interface under Settings, Utilities, rendered by the existing
+  authenticated Unraid web server. The plugin still opens no listener of its own.
+- The interface shows every watched container with its verdict, action level,
+  counters, suspension, and Breakglass latch state, and can suspend, resume,
+  reset, add, and remove containers.
+- All interface operations are delegated to the command line tool, which
+  performs the authoritative validation, so the page cannot express anything the
+  command line would refuse.
+- Added the report, add, and remove commands so configuration is never written
+  by the web layer directly.
+
+###2026.07.29
 - Initial CLI-only release.
 - Detects containers that report healthy while being unreachable, including a
   lost Docker network attachment and configured port bindings that were never
@@ -114,6 +150,26 @@ cat > "$TEMPORARY" <<EOF
   <FILE Name="/usr/local/emhttp/plugins/&name;/watch.conf.example" Mode="0644" Type="base64">
     <SHA256>$EXAMPLE_SHA256</SHA256>
     <INLINE>$EXAMPLE_BASE64</INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/container-watchdog.page" Mode="0644" Type="base64">
+    <SHA256>$PAGE_SHA256</SHA256>
+    <INLINE>$PAGE_BASE64</INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/php/watchdog_main.php" Mode="0644" Type="base64">
+    <SHA256>$MAIN_PHP_SHA256</SHA256>
+    <INLINE>$MAIN_PHP_BASE64</INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/php/watchdog_action.php" Mode="0644" Type="base64">
+    <SHA256>$ACTION_PHP_SHA256</SHA256>
+    <INLINE>$ACTION_PHP_BASE64</INLINE>
+  </FILE>
+
+  <FILE Name="/usr/local/emhttp/plugins/&name;/css/watchdog.css" Mode="0644" Type="base64">
+    <SHA256>$CSS_SHA256</SHA256>
+    <INLINE>$CSS_BASE64</INLINE>
   </FILE>
 
   <FILE Name="/boot/config/plugins/&name;/container-watchdog.cron" Mode="0600" Type="base64">

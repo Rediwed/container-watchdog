@@ -643,17 +643,92 @@ show_container() {
   return 0
 }
 
+# Rewrites watch.conf keeping every unrelated line intact. The record itself is
+# validated by read_record first, so the web page can never write a record the
+# command line would have rejected.
+write_config() {
+  local drop_name=$1 new_line=${2:-}
+  local temporary existing stripped
+  install -d -m 0700 "$CONFIG_DIR" 2>/dev/null || return 1
+  [[ ! -L "$CONFIG_FILE" ]] || { echo "Refusing to write a symlinked configuration" >&2; return 1; }
+  temporary=$(mktemp "$CONFIG_DIR/.watch.XXXXXX") || return 1
+  if [[ -f "$CONFIG_FILE" ]]; then
+    while IFS= read -r existing || [[ -n "$existing" ]]; do
+      stripped=${existing%%#*}
+      stripped=$(printf '%s' "$stripped" | tr -s '[:space:]' ' ')
+      stripped=${stripped# }
+      stripped=${stripped% }
+      if [[ -n "$stripped" ]] && read_record "$stripped" && [[ "$record_container" == "$drop_name" ]]; then
+        continue
+      fi
+      printf '%s\n' "$existing" >> "$temporary"
+    done < "$CONFIG_FILE"
+  fi
+  [[ -n "$new_line" ]] && printf '%s\n' "$new_line" >> "$temporary"
+  chmod 0600 "$temporary"
+  mv -f "$temporary" "$CONFIG_FILE" || { rm -f "$temporary"; return 1; }
+  return 0
+}
+
+add_record() {
+  local line
+  line=$(printf '%s ' "$@")
+  line=${line% }
+  if ! read_record "$line"; then
+    echo "Invalid record: $line" >&2
+    return 2
+  fi
+  local name=$record_container
+  write_config "$name" "$line" || return 1
+  log "action=configure container=$name result=ok"
+  refresh_status
+  return 0
+}
+
+remove_record() {
+  local name=$1
+  valid_name "$name" || { echo "Invalid container name" >&2; return 2; }
+  write_config "$name" "" || return 1
+  rm -f "$COUNTER_DIR/$name" "$SUSPEND_DIR/$name"
+  log "action=unconfigure container=$name result=ok"
+  refresh_status
+  return 0
+}
+
+# Fast, stable listing for dashboards: reads configuration, counters, suspension,
+# and latch state without running any check.
+report_all() {
+  local line
+  while IFS= read -r line; do
+    read_record "$line" || continue
+    load_counters "$record_container"
+    printf 'container=%s action=%s checks=%s networks=%s threshold=%s cooldown=%s max_actions=%s window=%s verdict=%s fails=%s repairs=%s suspended=%s latched=%s\n' \
+      "$record_container" "$record_action" "$record_checks" "${record_networks:--}" \
+      "$record_threshold" "$record_cooldown" "$record_max_actions" "$record_window" \
+      "${counter_last_verdict:-unknown}" "$counter_fails" "$counter_actions" \
+      "$(is_suspended "$record_container" && echo yes || echo no)" \
+      "$(is_latched "$record_container" && echo yes || echo no)"
+  done < <(each_record)
+}
+
 usage() {
   cat <<'EOF'
 Usage: container-watchdog COMMAND [CONTAINER]
 
 Read-only commands:
   list                 Show every configured container and its settings
+  report               Machine-readable state of every container, without checking
   check                Run all checks and report, without repairing anything
   status CONTAINER     Show settings, counters, and the current verdict
 
 Scheduled command:
   run                  Run checks and repair where allowed (used by cron)
+
+Configuration commands:
+  add container=NAME [KEY=VALUE ...]
+                       Add or replace a record, using the same syntax as
+                       watch.conf. Rejected unless every field validates.
+  remove CONTAINER     Stop watching a container and forget its counters
 
 Maintenance commands:
   suspend CONTAINER    Keep watching but only notify, never repair
@@ -691,6 +766,18 @@ main() {
     status)
       [[ $# -eq 2 ]] || { usage >&2; exit 2; }
       show_container "$2"
+      ;;
+    report)
+      report_all
+      ;;
+    add)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      shift
+      add_record "$@"
+      ;;
+    remove)
+      [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+      remove_record "$2"
       ;;
     suspend)
       [[ $# -eq 2 ]] && valid_name "$2" || { usage >&2; exit 2; }

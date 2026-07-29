@@ -23,12 +23,21 @@
   authoritative and tests can substitute stubs.
 - The published status stays aggregate-only: no container names, networks, URLs,
   or paths, and no network listener.
+- The web interface is a page inside the existing Unraid web server. It must stay
+  a thin shell: validate, then delegate to the command line tool. Never let it
+  write configuration or state, call Docker for anything but a read-only listing,
+  or accept a request without a POST method and a constant-time CSRF check.
+- Validate every interface value against an allowlist before escaping it into a
+  command, and escape arguments individually rather than building a string.
 - Secrets remain host-local under `/boot/config/plugins/container-watchdog/` or
   are reused from Container Breakglass; never embed them in source or manifests.
 
 ## Changes
 
 - Keep the self-contained `.plg` reproducible from reviewed sources.
+- The manifest heredoc in `build-plugin.sh` is unquoted so it can expand payload
+  variables. Never put a backtick in that file; it would be executed instead of
+  written.
 - Bump the sortable date version for any payload change and update `CHANGELOG.md`.
 - Run `./tests/validate.sh` before committing.
 - Test remediation only against stubs or disposable, no-volume containers with

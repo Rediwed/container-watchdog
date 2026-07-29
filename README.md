@@ -1,10 +1,13 @@
 # Container Watchdog for Unraid
 
-CLI-only Unraid plugin that detects containers which are *up* but broken, and
-repairs the narrow set of faults that a human would otherwise have to notice
-first. It is the autonomous counterpart to
+Unraid plugin that detects containers which are *up* but broken, and repairs the
+narrow set of faults that a human would otherwise have to notice first. It is the
+autonomous counterpart to
 [Container Breakglass](https://github.com/Rediwed/container-breakglass), and it
 defers to it: a container the operator deliberately latched is never restarted.
+
+It ships a web interface under **Settings → Utilities → Container Watchdog**, and
+the full command line remains available for scripting and recovery.
 
 ## Why it exists
 
@@ -23,7 +26,11 @@ configuration is reused on start.
 
 ## Safety boundary
 
-- No web server or network listener.
+- No network listener of its own. The interface is a page rendered by the web
+  server Unraid already runs, and inherits its authentication and CSRF token.
+- The interface owns no logic: every operation is delegated to the command line
+  tool, which performs the authoritative validation. The page cannot express
+  anything the command line would refuse.
 - No shell execution inside containers.
 - No container creation or removal, and no image or volume mutation.
 - The only network mutation is `docker network connect` for an exact container
@@ -97,19 +104,37 @@ Breakglass configuration is used.
 
 ```text
 container-watchdog list              # configured containers and their settings
+container-watchdog report            # machine-readable state, without checking
 container-watchdog check             # run every check, repair nothing
 container-watchdog status NAME       # settings, counters, and current verdict
 container-watchdog run               # the scheduled cycle, used by cron
+container-watchdog add container=NAME action=restart
+container-watchdog remove NAME       # stop watching and forget its counters
 container-watchdog suspend NAME      # keep watching, stop repairing
 container-watchdog resume NAME       # allow repairs again, clear counters
 container-watchdog reset NAME        # clear counters only
 ```
 
+## Web interface
+
+**Settings → Utilities → Container Watchdog** shows a tile row with the overall
+status and the durable counters, followed by a table of every watched container:
+its verdict, what it is allowed to do, which checks apply, consecutive failures,
+repairs used in the current window, and whether it is suspended or latched.
+
+From there you can suspend, resume, reset, inspect, and remove a container, add a
+new one with a name picker fed from the running containers, and run a full check
+pass on demand. Running checks never repairs anything.
+
+The page warns when Container Breakglass is missing, because without it the
+watchdog cannot see latches or deployment guards.
+
 ## Configuration
 
 Records live in `/boot/config/plugins/container-watchdog/watch.conf`. Nothing is
-watched until entries are added. The full syntax is documented in
-`watch.conf.example`, installed alongside this README.
+watched until entries are added, through the web interface or the command line.
+The full syntax is documented in `watch.conf.example`, installed alongside this
+README.
 
 ```text
 container=redman action=reattach networks=redman-docker-api
@@ -183,7 +208,7 @@ Then add a service widget to `services.yaml`:
 ## Build
 
 ```bash
-./build-plugin.sh 2026.07.29
+./build-plugin.sh 2026.07.29a
 ```
 
 Produces a self-contained `dist/container-watchdog.plg` with every payload

@@ -5,6 +5,30 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29a]
+
+### Added
+
+- Web interface under **Settings → Utilities → Container Watchdog**, rendered by
+  the web server Unraid already runs. The plugin still opens no listener of its
+  own and inherits the existing authentication and CSRF token.
+- The interface lists every watched container with its verdict, action level,
+  checks, networks, counters, suspension, and Breakglass latch state, and can
+  suspend, resume, reset, inspect, add, and remove containers, or run a check
+  pass on demand.
+- `report`, `add`, and `remove` commands, so the web layer never writes
+  configuration itself and every record passes the same validation as the
+  command line.
+
+### Security
+
+- Interface requests are rejected unless they are POST and carry the host CSRF
+  token, compared with a constant-time comparison.
+- Every value is validated against an allowlist before it is escaped into a
+  command, so a rejected value never reaches a shell.
+- The interface performs no Docker mutation of its own; its only Docker call is a
+  read-only container listing for the add form.
+
 ## [2026.07.29]
 
 ### Added

@@ -1,0 +1,122 @@
+/* Container Watchdog — styling that follows the host theme rather than fighting it. */
+
+.watchdog-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+
+.watchdog-tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 110px;
+  padding: 10px 14px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+}
+
+.watchdog-tile-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.watchdog-tile-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.watchdog-state-ready .watchdog-tile-value { color: #4caf50; }
+.watchdog-state-degraded .watchdog-tile-value { color: #ff9800; }
+.watchdog-state-suspended .watchdog-tile-value { color: #ff9800; }
+.watchdog-state-unavailable .watchdog-tile-value { color: #f44336; }
+.watchdog-state-idle .watchdog-tile-value { opacity: 0.6; }
+
+.watchdog-warning {
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-left: 4px solid #ff9800;
+  background: rgba(255, 152, 0, 0.12);
+}
+
+.watchdog-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.watchdog-table th,
+.watchdog-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  vertical-align: middle;
+}
+
+.watchdog-table th {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.75;
+}
+
+.watchdog-subtle {
+  opacity: 0.65;
+  font-size: 0.85rem;
+}
+
+.watchdog-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: rgba(128, 128, 128, 0.2);
+}
+
+.watchdog-badge-ok { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
+.watchdog-badge-fail { background: rgba(244, 67, 54, 0.2); color: #f44336; }
+.watchdog-badge-suspended { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
+.watchdog-badge-latched { background: rgba(103, 58, 183, 0.2); color: #9575cd; }
+
+.watchdog-row-actions button {
+  margin-right: 4px;
+}
+
+.watchdog-danger {
+  color: #f44336;
+}
+
+.watchdog-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.watchdog-output {
+  padding: 10px 14px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+}
+
+.watchdog-form dt {
+  margin-top: 10px;
+  font-weight: 700;
+}
+
+.watchdog-form dd label {
+  margin-right: 14px;
+  white-space: nowrap;
+}
+
+.watchdog-form input[type="number"] {
+  width: 90px;
+  margin-right: 6px;
+}
