@@ -5,6 +5,17 @@ All notable changes to Container Watchdog.
 Versions are sortable dates, `YYYY.MM.DD` with an optional letter suffix, so the
 Unraid plugin manager orders them correctly.
 
+## [2026.07.29m]
+
+### Fixed
+
+- A fault that did not clear sent a notification every cycle, which for a
+  container that stays broken is a push every two minutes. A situation is now
+  sent once and then at most hourly while it lasts. The syslog line is still
+  written on every occurrence, and a change of situation, including recovery,
+  is still sent immediately. Removing, resuming, or resetting a container
+  re-arms it, and the damping state lives on tmpfs so a reboot re-arms it too.
+
 ## [2026.07.29l]
 
 ### Added

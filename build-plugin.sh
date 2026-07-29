@@ -22,7 +22,7 @@ CSS_FILE="$SCRIPT_DIR/plugin/css/watchdog.css"
 README_FILE="$SCRIPT_DIR/README.md"
 DIST_DIR="$SCRIPT_DIR/dist"
 OUTPUT="$DIST_DIR/container-watchdog.plg"
-VERSION="${1:-2026.07.29l}"
+VERSION="${1:-2026.07.29m}"
 
 for file in "$HOST_SCRIPT" "$NOTIFY_SCRIPT" "$STATUS_SCRIPT" "$CRON_FILE" \
   "$EVENT_FILE" "$REMOVE_SCRIPT" "$EXAMPLE_FILE" "$PAGE_FILE" "$MAIN_PHP_FILE" \
@@ -94,6 +94,9 @@ cat > "$TEMPORARY" <<EOF
 <PLUGIN name="&name;" author="&author;" version="&version;" min="7.0.0" icon="dog" pluginURL="https://github.com/Rediwed/container-watchdog/releases/latest/download/container-watchdog.plg">
   <CHANGES>
 ###$VERSION
+- A fault that did not clear sent a notification every cycle. A situation is now
+  sent once and then at most hourly, while a change, including recovery, is
+  still sent immediately. The log still records every occurrence.
 - The page now refreshes itself, so the table and summary tiles stay current
   without a reload. Polling pauses while the tab is hidden or a control is in
   use, and backs off if the endpoint stops answering.

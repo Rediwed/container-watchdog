@@ -40,7 +40,9 @@ configuration is reused on start.
 - Stop and kill are not implemented here. They are Breakglass operations, so
   they go through the audited path and leave a persistent latch.
 - Every action is written to syslog with tag `container-watchdog`.
-- Every action can send a bounded, best-effort ntfy notification.
+- Every action can send a bounded, best-effort ntfy notification. A situation
+  that persists is sent once and then at most hourly, so a fault that lasts all
+  night does not arrive every two minutes; a change is always sent at once.
 - An unparseable configuration line is skipped and logged, never guessed at.
 - When the Docker daemon does not answer, the whole cycle is skipped rather than
   treating every container as broken at once.
@@ -208,7 +210,7 @@ Then add a service widget to `services.yaml`:
 ## Build
 
 ```bash
-./build-plugin.sh 2026.07.29l
+./build-plugin.sh 2026.07.29m
 ```
 
 Produces a self-contained `dist/container-watchdog.plg` with every payload

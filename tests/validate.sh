@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXPECTED_VERSION="2026.07.29l"
+EXPECTED_VERSION="2026.07.29m"
 
 for script in \
   "$ROOT/build-plugin.sh" \
@@ -20,6 +20,7 @@ bash "$ROOT/tests/test-checks.sh"
 bash "$ROOT/tests/test-safety.sh"
 bash "$ROOT/tests/test-status.sh"
 bash "$ROOT/tests/test-notify.sh"
+bash "$ROOT/tests/test-notice.sh"
 bash "$ROOT/tests/test-ui.sh"
 
 "$ROOT/build-plugin.sh" "$EXPECTED_VERSION" >/dev/null

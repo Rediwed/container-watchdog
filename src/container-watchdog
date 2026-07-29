@@ -22,6 +22,9 @@ STATISTICS_FILE="$STATE_DIR/statistics"
 SUSPEND_DIR="$STATE_DIR/suspended"
 RUNTIME_DIR="${WATCHDOG_RUNTIME_DIR:-/run/container-watchdog}"
 COUNTER_DIR="$RUNTIME_DIR/counters"
+# Kept on tmpfs beside the counters: a reboot should re-arm every notification,
+# and this is written on cycles where nothing durable changed.
+NOTICE_DIR="$RUNTIME_DIR/notices"
 RUN_LOCK_FILE="$RUNTIME_DIR/run.lock"
 NOTIFY_TOOL="${WATCHDOG_NOTIFY_TOOL:-/usr/local/sbin/container-watchdog-notify}"
 STATUS_TOOL="${WATCHDOG_STATUS_TOOL:-/usr/local/sbin/container-watchdog-status}"
@@ -45,6 +48,9 @@ DEFAULT_WINDOW=3600
 DEFAULT_HTTP_STATUS=200
 DOCKER_TIMEOUT=15
 ACTION_TIMEOUT=120
+# Seconds before an unchanged situation is worth repeating. A fault that lasts
+# all night is one problem, not several hundred.
+NOTIFY_REPEAT="${WATCHDOG_NOTIFY_REPEAT:-3600}"
 
 # ── Logging and notification ──
 
@@ -58,13 +64,49 @@ notify() {
   printf '%s' "$1" | "$TIMEOUT_TOOL" -k 1 8 "$NOTIFY_TOOL" >/dev/null 2>&1 || true
 }
 
+# True when a notification carries new information: either the situation changed,
+# or the same situation has persisted long enough to be worth repeating. Anything
+# that goes wrong here answers yes, because a duplicate push is a far smaller
+# problem than a missed one.
+notice_is_new() {
+  local container=$1 key=$2 file="$NOTICE_DIR/$container" previous="" seen=0 now
+  now=$(date +%s)
+  if [[ -f "$file" && ! -L "$file" ]]; then
+    IFS='|' read -r previous seen < "$file" 2>/dev/null || true
+  fi
+  # An epoch second is wider than valid_number allows, which is meant for the
+  # small counters; the timestamp fields use their own bound.
+  [[ "$seen" =~ ^[0-9]{1,12}$ ]] || seen=0
+  if [[ "$key" == "$previous" ]] && (( now - seen < NOTIFY_REPEAT )); then
+    return 1
+  fi
+  install -d -m 0700 "$NOTICE_DIR" 2>/dev/null || return 0
+  # Written the same way as the counters: a rename replaces a symlink rather
+  # than following it, and a half-written file can never be read back.
+  local temporary
+  temporary=$(mktemp "$NOTICE_DIR/.$container.XXXXXX" 2>/dev/null) || return 0
+  printf '%s|%s\n' "$key" "$now" > "$temporary" 2>/dev/null || { rm -f "$temporary"; return 0; }
+  chmod 0600 "$temporary" 2>/dev/null || true
+  mv -f "$temporary" "$file" 2>/dev/null || rm -f "$temporary"
+  return 0
+}
+
+forget_notice() {
+  rm -f "$NOTICE_DIR/$1" 2>/dev/null || true
+}
+
 report() {
   # report ACTION CONTAINER RESULT DETAIL
   local action=$1 container=$2 result=$3 detail=${4:-}
   local line="action=$action container=$container result=$result"
   [[ -n "$detail" ]] && line+=" detail=$detail"
+  # The log keeps every occurrence for forensics; only the push is damped.
   log "$line"
-  notify "$line"
+  # The detail carries the fault signature, so it belongs in the key: a fault
+  # that changes shape is new information, not a repeat of the old one.
+  if notice_is_new "$container" "$action:$result:$detail"; then
+    notify "$line"
+  fi
 }
 
 refresh_status() {
@@ -536,7 +578,9 @@ evaluate() {
   fi
 
   if (( healthy == 1 )); then
-    if [[ "$counter_last_verdict" == fail ]]; then
+    # A dry run must leave nothing behind, including the damping state that a
+    # notification would write.
+    if (( dry_run == 0 )) && [[ "$counter_last_verdict" == fail ]]; then
       report recovered "$name" ok "checks=$checks"
     fi
     counter_fails=0
@@ -706,6 +750,7 @@ remove_record() {
   valid_name "$name" || { echo "Invalid container name" >&2; return 2; }
   write_config "$name" "" || return 1
   rm -f "$COUNTER_DIR/$name" "$SUSPEND_DIR/$name"
+  forget_notice "$name"
   log "action=unconfigure container=$name result=ok"
   refresh_status
   return 0
@@ -806,12 +851,14 @@ main() {
       [[ $# -eq 2 ]] && valid_name "$2" || { usage >&2; exit 2; }
       rm -f "$SUSPEND_DIR/$2"
       rm -f "$COUNTER_DIR/$2"
+      forget_notice "$2"
       report resumed "$2" ok
       refresh_status
       ;;
     reset)
       [[ $# -eq 2 ]] && valid_name "$2" || { usage >&2; exit 2; }
       rm -f "$COUNTER_DIR/$2"
+      forget_notice "$2"
       log "action=reset container=$2 result=ok"
       ;;
     ''|-h|--help|help)
